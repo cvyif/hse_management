@@ -11,12 +11,18 @@ import {
   type DashboardScope,
   type DateRange,
 } from '@/features/dashboard/dashboardLogic'
-import { aggregateEntityPerformance, aggregateObservationCounts } from '@/services/analytics.service'
+import {
+  aggregateEntityPerformance,
+  aggregateObservationCounts,
+  aggregateTrends,
+  type TrendGranularity,
+} from '@/services/analytics.service'
 import { useAuthStore } from '@/stores/auth.store'
 
 export const dashboardKeys = {
   analytics: ['dashboard', 'analytics'] as const,
   performance: ['dashboard', 'performance'] as const,
+  trends: ['dashboard', 'trends'] as const,
 }
 
 /**
@@ -125,4 +131,38 @@ export function useAreaPerformance(scope: DashboardScope, range: DateRange) {
   const ids = useMemo(() => visible.map((area) => area.id), [visible])
   const performance = useEntityPerformance('areaId', ids, scope, range)
   return { areas, visible, performance }
+}
+
+/**
+ * Observation Trends (Task 7.4): exact server-side time-series counts for the
+ * scope, the selected dashboard period and a granularity. The range is pushed
+ * into every bucket query; the previous-period total is computed server-side
+ * too. Refreshed with the same 60-second strategy as the rest of the
+ * dashboard.
+ */
+export function useObservationTrends(
+  scope: DashboardScope,
+  range: DateRange,
+  granularity: TrendGranularity,
+) {
+  return useQuery({
+    queryKey: [
+      ...dashboardKeys.trends,
+      granularity,
+      scope.companyId ?? 'all',
+      scope.areaIds ? scope.areaIds.join('|') : 'all',
+      range.from ?? 'all',
+      range.to ?? 'all',
+    ],
+    queryFn: () =>
+      aggregateTrends(
+        scope,
+        {
+          from: range.from ?? undefined,
+          to: range.to ?? undefined,
+        },
+        granularity,
+      ),
+    refetchInterval: 60_000,
+  })
 }

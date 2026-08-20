@@ -691,3 +691,80 @@ npm run typecheck
 npm run lint
 npm run build
 ```
+
+# Task 7.4 — Manual Verification Script (Dashboard Trends & Time Analytics)
+
+Run against a real Firebase project (or the emulators, Java 11+). **No new
+indexes are required** — every trend query reuses the existing composite
+indexes, so no `firestore:indexes` deploy is needed for this task. Prerequisites:
+an approved account for each role and observations spread over multiple days
+(and statuses/risks/sections) so buckets are non-empty.
+
+## 42. Granularity & date period
+
+1. Load `/dashboard` and switch the period:
+   - Last 7 days → the granularity control shows only **Daily** (~8 buckets).
+   - Last 30 days → only **Weekly** (~5 buckets).
+   - Last 90 days → **Weekly** (default) and **Monthly**.
+   - All time → only **Monthly**, with the "most recent N months" note.
+2. Switching granularity re-runs the count queries and the charts update.
+3. Switching the period updates the trend range; if the new range no longer
+   supports the selected granularity, it falls back to a valid option.
+4. Confirm `sum of bucket totals` equals the KPI total for the same period and
+   scope.
+
+## 43. Main trend & previous period
+
+1. The line chart shows the observation total per bucket for the selected
+   period/scope.
+2. The summary shows Current Period, Previous Period, Change (±N) and Change
+   Rate (±N.N%), with neutral wording (Increased / Decreased / No change).
+3. Verify the previous period is the equivalent duration immediately before the
+   current one (e.g. 7d → the prior 7 days).
+4. With zero observations in the previous period the UI says "No previous-period
+   baseline" (no division by zero). On All time it says "No comparison
+   available".
+
+## 44. Status / risk / OIL-GAS trends
+
+1. Status trend shows exactly the operational statuses (OPEN, ACTION_REQUIRED,
+   ACTION_SUBMITTED, UNDER_VERIFICATION, CLOSED); DRAFT/ASSIGNED never appear.
+2. Risk trend shows LOW/MEDIUM/HIGH/CRITICAL with numeric column totals and
+   legend values (risk counts span all statuses, consistent with the Task 7.2
+   risk chart).
+3. OIL/GAS trend shows the two existing sections.
+4. Empty bucket columns show 0, never a misleading gap.
+
+## 45. Role-aware scoping (direct Firestore, not just UI)
+
+- **COMPANY_REP**: every bucket and the previous-period query include
+  `companyId == <their company>`; a raw unscoped trend query for another
+  company → denied.
+- **AREA_AUTHORITY**: every bucket and the previous-period query include
+  `areaId in <assigned areas>`; an authority with no active assignment sees the
+  empty trend state.
+- **PA / HSE / SUPER_ADMIN**: full authorized scope.
+
+## 46. Loading / empty / error
+
+1. First load → LoadingCard (no premature zero chart).
+2. No observations in scope/period → the "No observations found for the
+   selected period" empty state (no flat zero chart).
+3. Break connectivity/rules → ErrorCard with Retry; the rest of the Dashboard
+   still works (independent section).
+
+## 47. Responsive & language
+
+1. On mobile the charts fit the viewport (no horizontal page overflow); bucket
+   labels stay sparse.
+2. Switch to Arabic (RTL): all titles, summary, granularity control and chart
+   labels render in Arabic; the line-chart time axis mirrors (oldest on the
+   right) and the stacked-bar columns follow the RTL direction.
+
+## 48. Build quality
+
+```sh
+npm run typecheck
+npm run lint
+npm run build
+```

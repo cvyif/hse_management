@@ -17,8 +17,9 @@ Built with React 19, TypeScript, Vite, Tailwind CSS v4 and Firebase
 - **Phase 6 — Site Map & Observation Map**: complete.
 - **Phase 7 — Dashboard & Analytics (Task 7.1 — Dashboard Foundation)**: complete.
 - **Phase 7 — Dashboard & Analytics (Task 7.2 — Scalable Observation Analytics & Accurate KPIs)**: complete.
-- **Phase 7 — Dashboard & Analytics (Task 7.3 — Company & Area Performance)**: implemented, awaiting approval (not yet pushed/deployed).
-  See `REPORT.md` for the detailed Task 7.1/7.2/7.3 reports and the roadmap.
+- **Phase 7 — Dashboard & Analytics (Task 7.3 — Company & Area Performance)**: complete.
+- **Phase 7 — Dashboard & Analytics (Task 7.4 — Dashboard Trends & Time Analytics)**: implemented, awaiting approval (not yet pushed/deployed).
+  See `REPORT.md` for the detailed Task 7.1/7.2/7.3/7.4 reports and the roadmap.
 
 Phase 3 adds the Observation workflow: a 6-step New Observation wizard
 (company, area with auto-derived section, permit, details, evidence, review),
@@ -103,6 +104,14 @@ sorted by Total and linking into `/observations?company=<id>` /
 own company only, Area Authority → assigned areas only), the dashboard
 date-period filter drives both tables, and four additional composite indexes
 cover the cross-scoped queries (deployed by the same command above).
+
+Task 7.4 adds **Observation Trends** — a time-series section on the same
+server-side count() architecture. It shows how operational observations change
+over the selected period (Daily/Weekly/Monthly granularity, auto-selected and
+switchable), a neutral previous-period comparison, and status, risk and OIL/GAS
+trends — all role-scoped, RTL-safe, responsive and free of observation
+downloads. Buckets are capped and batched so the aggregation stays bounded, and
+every query reuses the existing indexes (no new index deploy needed).
 
 ## Getting started
 

@@ -465,3 +465,224 @@ visual checks. Follow `docs/verification.md` (§35) against a real project.
   default sort by Total descending).
 - Reports/export (PDF/Excel/CSV) and scheduled reports.
 - Denormalized counters to reduce per-entity query count if the station grows.
+
+---
+
+# Task 7.4 Report — Dashboard Trends & Time Analytics
+
+Date: 2026-08-21
+
+## 1. Objective
+
+Extend the Dashboard with a scalable **Trends & Time Analytics** section built
+on the same server-side `count()` aggregation architecture as Tasks 7.2/7.3:
+an observation trend over time (with previous-period comparison), plus status,
+risk and OIL/GAS trends, all role-scoped, period-aware, RTL-safe and free of
+observation downloads.
+
+## 2. Scope
+
+- New **Observation Trends** dashboard section below the existing analytics.
+- Time bucketing (Daily/Weekly/Monthly) with an auto-selected, switchable
+  granularity.
+- Previous-period comparison with neutral wording.
+- Status, Risk and OIL/GAS time trends (existing models only).
+- No new routes, no new filters system, no DB redesign, no rules changes, no
+  new dependencies, no export/report/map/notification features.
+
+## 3. Trend Architecture
+
+`aggregateTrends` (in `src/services/analytics.service.ts`) computes every
+bucket server-side. For each time bucket it runs 11 bounded `count()` queries
+— 5 operational statuses, 4 risk levels, 2 sections — and the main line trend
+is derived from the status sums (no separate total query). The role scope
+(companyId / areaIds) and the bucket window are pushed into **every** query, so
+no observation document is downloaded and results are exact at any collection
+size. Buckets are built from calendar-aligned units that partition the window
+exactly, so `sum(bucket totals) == the full-window total`.
+
+## 4. Time Bucketing
+
+- Granularities: Daily, Weekly, Monthly (`TREND_GRANULARITIES`). Buckets are
+  aligned to local calendar days / Mondays / month starts; the first bucket is
+  clamped to the window start and the last to the window end (half-open
+  `[start, end)` windows avoid boundary double-counts).
+- Auto-selection from the range with a user override when more than one
+  option is meaningful (min 3 buckets; never more than `MAX_TREND_BUCKETS = 14`;
+  a granularity that would hit the cap is **not offered**, so the chart always
+  covers the full range):
+  - Last 7 days → Daily (8 buckets).
+  - Last 30 days → Weekly (5 buckets).
+  - Last 90 days → Weekly (default, 14 buckets) or Monthly.
+  - All time → Monthly (capped at the most recent 14 months; a visible note
+    says so).
+- No unnecessary granularity options are shown (e.g. Monthly is not offered
+  for ranges under a month).
+
+## 5. Previous Period Comparison
+
+`previousRange` computes the equivalent-duration window immediately before the
+selected range (`[from - duration, from)`), and the previous total comes from a
+single server-side `count()` with `status in [OPEN…CLOSED]` (DRAFT/ASSIGNED
+excluded). The summary shows Current Period, Previous Period, Change
+(±N) and Change Rate (±N.N%), with neutral wording — "Increased", "Decreased",
+"No change" — never implying that more observations is better/worse. When there
+is no previous window (all time) the UI shows "No comparison available"; when
+the previous period is zero it shows "No previous-period baseline" (no
+division by zero).
+
+## 6. Status Trends
+
+Stacked time bars over the exact **operational statuses**
+(`OPERATIONAL_STATUSES`: OPEN, ACTION_REQUIRED, ACTION_SUBMITTED,
+UNDER_VERIFICATION, CLOSED), identical to Tasks 7.2/7.3. DRAFT/ASSIGNED are
+never counted. Column totals are printed above each bar and the legend lists
+each status with its total and share.
+
+## 7. Risk Trends
+
+Stacked time bars over the existing risk model (LOW, MEDIUM, HIGH, CRITICAL)
+using the existing `RISK_LEVELS` and `RISK_COLORS`. As in the Task 7.2 risk
+chart, risk counts span all statuses (a HIGH/CRITICAL draft is still a
+HIGH/CRITICAL risk) — documented behaviour. Values are numeric (column totals +
+legend totals/shares), never color-only.
+
+## 8. OIL/GAS Trends
+
+Stacked time bars comparing the two existing sections (OIL vs GAS) via the
+existing `SECTIONS` model and `SECTION_COLORS`, matching the Task 7.2 OIL/GAS
+chart semantics. No new section field.
+
+## 9. Filters
+
+The section reuses `useDashboardFilters` — the **same** global period state as
+the KPI cards, analytics and Company/Area Performance. When the period changes
+(All / 7 / 30 / 90 days) the trend range updates and every bucket query is
+re-run; when the new range no longer supports the selected granularity (e.g.
+7d→30d drops Daily) the granularity falls back to a valid option. There is no
+second date-filter system and no duplicated filter state. The dashboard has no
+global section/company/area filters, so none are duplicated either.
+
+## 10. Role Scoping
+
+Identical to the existing Dashboard: the scope comes from
+`useDashboardScope` → `resolveDashboardScope(profile)` and is pushed into every
+trend query through `baseConstraints`:
+
+- **SUPER_ADMIN / HSE_MANAGER / HSE_OFFICER / PA**: full authorized scope.
+- **AREA_AUTHORITY**: `areaId in <assigned areas>` on every bucket query and on
+  the previous-period total (rotation/assignment architecture respected;
+  `__no_areas__` → empty trend).
+- **COMPANY_REP**: `companyId == <their company>` on every bucket query and the
+  previous-period total.
+
+The scope is enforced in the query/service layer — the UI only renders what the
+queries returned, so there is no path for a Company Rep or Area Authority to
+aggregate data outside their authorized scope.
+
+## 11. Query Strategy
+
+- Per bucket: 5 status + 4 risk + 2 section `count()` queries = **11**. The
+  main line trend reuses the status sums (0 extra).
+- Buckets ≤ 14 (`MAX_TREND_BUCKETS`), processed in chunks of 4
+  (`TREND_BATCH_SIZE`) so at most ~44 aggregation queries are in flight.
+- Previous period: 1 additional `count()` when the range has a start.
+- Worst common budgets: 7d → 8 buckets (89 queries), 30d → 5 buckets (56),
+  90d → 14 buckets (155), all time → 14 buckets (154). Every query is a
+  bounded-window server aggregation; the numbers are documented here rather
+  than hidden.
+- No "one query per day × status × risk × company × area" explosion.
+
+## 12. Performance
+
+- Zero document downloads — everything is `getCountFromServer`.
+- Query volume is bounded and constant per period/granularity (never grows with
+  observation count).
+- 60-second refresh via the existing dashboard React Query strategy; no
+  aggressive polling, no new listeners.
+
+## 13. Indexes
+
+**No new indexes.** Every trend query reuses the existing composite indexes —
+the scope field(s) `(companyId | areaId)` + `(status | riskLevel | section)` +
+`createdAt` (all present since Tasks 7.2/7.3). `firestore.indexes.json` is
+unchanged (21 indexes, valid JSON). Static verification only; live index
+deployment is NOT claimed.
+
+## 14. UI
+
+Dashboard structure now: KPI cards → Analytics charts → Company Performance →
+Area Performance → **Observation Trends**. The section reuses
+`DashboardSection`, `Card`/`CardHeader`/`CardBody`, `LoadingCard`, `ErrorCard`
+(with Retry) and `EmptyState`. New dependency-free SVG/CSS components in
+`charts.tsx`: `LineChart` (main trend) and `StackedTimeBars` (status/risk/
+section trends), consistent with the existing chart design. A concise
+summary block (Current/Previous/Change/Rate + neutral caption) sits above the
+main chart, and the granularity segmented control mirrors the existing period
+control styling.
+
+## 15. Responsive Design
+
+`LineChart` uses an `viewBox` SVG that scales to any width; `StackedTimeBars`
+uses flexible columns, so charts fit narrow screens with no horizontal page
+overflow. Sparse bucket labels prevent crowding on mobile. The granularity
+control wraps under the section title on small screens.
+
+## 16. EN/AR
+
+All new strings live in `src/i18n/locales/en.ts` and `ar.ts`
+(`dashboard.trends.*`): section title/description, summary labels, neutral
+direction wording, granularity labels, chart titles and aria labels, capped
+note, empty state. Nothing is hardcoded. Arabic renders RTL: the time axis of
+the line chart mirrors (oldest on the right) and the stacked-bar columns follow
+the document direction; all other layout uses logical properties.
+
+## 17. Accessibility
+
+- Granularity buttons are native `<button>` elements with `aria-pressed`
+  (keyboard accessible); period filtering is unchanged.
+- Charts carry `role="img"` with descriptive `aria-label`s.
+- Values are never color-only: column totals are printed above every bar, the
+  legends show numeric totals and shares, and the summary block shows the
+  numbers in text.
+
+## 18. Verification
+
+Executed in this session:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Typecheck | `npm run typecheck` | Passed, 0 errors |
+| Lint | `npm run lint` | Passed, 0 warnings, 0 errors (113 files, oxlint) |
+| Production build | `npm run build` | Passed (vite 8.2.1, 219 modules) |
+| Dev-server smoke test | `npm run dev` + HTTP fetch | `/`, `/login`, `/register`, `/dashboard`, `/observations`, `/observations?company=…`, `/observations?area=…`, `/notifications`, `/map` all 200 |
+| Bundle content | marker scan of `dist` | Task 7.4 EN/AR strings present (Observation Trends, Current Period, Previous Period, Change Rate, granularity labels, chart titles, …) |
+| Bucket/granularity math | standalone simulation of the pure helpers | 7d → daily 8, 30d → weekly 5, 90d → weekly 14 / monthly 4, all → monthly 14; capped options never offered |
+
+RBAC/scoping reviewed by design (§10). **Not executed** (no Firebase
+credentials/emulator, no test accounts, no browser harness): live count-query
+results, per-role trend scoping, rendered loading/empty/error states, EN/AR/RTL
+and responsive visual checks. Follow `docs/verification.md` (§42) against a
+real project.
+
+## 19. Limitations
+
+- Firebase live verification remains NOT VERIFIED (no credentials/emulator/test
+  accounts); live trend queries and per-role results must be confirmed in a
+  real project.
+- Trends are exact but cost 11 server count queries per bucket; the bucket
+  count is capped (14) so the section is bounded — a denormalized time-series
+  counter (deferred) would cut this further at the cost of a schema extension.
+- All-time trends are bucketed monthly and capped to the most recent 14 months
+  (a visible note explains this); the KPI cards still show true all-time
+  totals.
+- Risk and OIL/GAS trends count across all statuses (consistent with the
+  Task 7.2 risk/OIL-GAS charts); the status trend and total trend are
+  operational-only. This is documented behaviour.
+
+## 20. Future Work
+
+- Company/area-level trends (per-entity time series) and map trend layers.
+- Denormalized daily counters for O(1) time-bucket queries at large scale.
+- Reports/export (PDF/Excel/CSV) and scheduled reports (future tasks).
+- Tooltips/values on hover for the line chart.

@@ -13,6 +13,7 @@ import { DashboardFilters } from '@/features/dashboard/DashboardFilters'
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader'
 import { DashboardSection } from '@/features/dashboard/DashboardSection'
 import { KpiCard, type KpiTone } from '@/features/dashboard/KpiCard'
+import { TrendsSection } from '@/features/dashboard/TrendsSection'
 import {
   OPERATIONAL_STATUSES,
   RISK_COLORS,
@@ -239,6 +240,7 @@ export function DashboardPage() {
 
       <CompanyPerformanceSection />
       <AreaPerformanceSection />
+      <TrendsSection />
     </div>
   )
 }
