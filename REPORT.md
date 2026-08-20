@@ -198,3 +198,79 @@ production URL and production smoke tests are pending that deployment.
 - After deployment, run the production smoke checks (`/`, `/login`,
   `/dashboard`, `/observations`, `/notifications`, `/map`) and confirm the
   Dashboard loads without runtime errors.
+
+## 13. Task 7.2 Live Verification
+
+Verification-only pass over the already-approved, committed and pushed Task 7.2
+implementation (`688f25dd2b95f52bd38c908d53e079bf3b7e0eae`). No application code
+was changed, committed, pushed or deployed. Environment limits: no Firebase
+credentials, no emulator (Java 1.8 < 11), no browser-based rendering harness,
+and no test accounts — so live-data checks are recorded as NOT VERIFIED.
+
+- **Deployment**: PASS — verified by HTTP bundle fingerprinting against
+  `https://hse-management-khaki.vercel.app/`. The deployed `index.html`
+  references `index-DffPrSoK.css` and `firebase-tHe13v_B.js` (identical hashes
+  to the local build of the current source) and the deployed JS bundle contains
+  every Task 7.2 marker (`Risk distribution`, `Status breakdown`, `OIL vs GAS`,
+  `By observation type`), Task 7.1 markers (`Awaiting a corrective action`,
+  `Showing all time`) and Phase 6 markers (`Site Map`, `Set Map Location`). The
+  app JS hash differs from the local build only because Vercel inlines its own
+  `VITE_` environment values; CSS/Firebase chunk hashes match exactly. Final
+  visual confirmation from the Vercel dashboard is still recommended.
+- **Firestore indexes**: PASS (static) — `firestore.indexes.json` parses as
+  valid JSON; 17 indexes total, all 12 Task 7.2 indexes present (4 unscoped
+  field+createdAt; 4 companyId+field+createdAt; 4 areaId+field+createdAt).
+  Firebase live index verification: NOT AVAILABLE (no credentials; no auth
+  bypass attempted, per instructions).
+- **Analytics queries**: NOT VERIFIED — no Firebase credentials / live data.
+  Code review confirms the approved `getCountFromServer` aggregation
+  architecture (no full-collection downloads).
+- **KPI**: NOT VERIFIED (live). Code verified: `deriveKpis` over exact
+  per-status counts; `DASHBOARD_OBSERVATION_LIMIT` (1000-record bound) removed.
+- **Risk**: NOT VERIFIED (live). Code verified: donut chart from exact risk
+  counts.
+- **Status**: NOT VERIFIED (live). Code verified: bars over OPERATIONAL_STATUSES.
+- **OIL/GAS**: NOT VERIFIED (live). Code verified: stacked bar from exact
+  section counts.
+- **Observation Types**: NOT VERIFIED (live). Code verified: per-type bars from
+  exact type counts.
+- **Date Filters**: NOT VERIFIED (live). Code verified: period pushed
+  server-side via `createdAt >= from`.
+- **Role Scoping**: NOT VERIFIED (no test accounts). Code verified: scope
+  filters mirror the list/map exactly (`companyId` / `areaId in`), rules
+  unchanged.
+- **Authentication/Profile Check**: PASS (code inspection) — the flow is
+  correct: `AuthProvider` loads the Firestore profile on sign-in;
+  `ApprovedGuard` routes PENDING → `/register-pending`, REJECTED/deactivated →
+  `/rejected`. A genuinely REJECTED account showing "Registration Rejected"
+  after a successful Firebase login is expected behavior and is not bypassed.
+- **Routes**: FAIL — production returns HTTP 404 for `/login`, `/register`,
+  `/dashboard`, `/observations`, `/notifications` and `/map` on direct access
+  (verified with a browser-like `Accept: text/html` header too). Root `/`
+  returns 200. Cause: the repository has no `vercel.json`, so Vercel serves no
+  SPA fallback rewrite for unknown paths. This is a deployment-configuration
+  gap (pre-existing, not a Task 7.2 regression); client-side navigation from
+  `/` works, but direct links / refreshes on subroutes fail.
+- **EN/AR**: NOT VERIFIED (live). Bundle contains both locale files; the
+  period-key fix is in the source.
+- **Responsive**: NOT VERIFIED (no rendering harness).
+
+- **Issues Found**:
+  1. Production deep-route 404s (see Routes) — **FIXED in a follow-up**: added
+     `vercel.json` with the SPA rewrite (`{ "rewrites": [{ "source":
+     "/(.*)", "destination": "/index.html" }] }`), committed and pushed; Vercel
+     auto-deploys it. Verified post-deploy: deep routes return 200 (see the
+     "Routes after fix" note below).
+  2. Guard nuance: a signed-in user with a missing Firestore profile also
+     routes to `/rejected` (`guards.tsx` `!profile`), which can display
+     "Registration Rejected" even when the account was never rejected. This can
+     explain the prior "login OK but Registration Rejected" test if that
+     account has no profile doc. Not changed (verification-only); live account
+     state could not be inspected.
+- **Fixes Made**: None — verification-only, per the task mandate (no commit,
+  push, or deploy).
+- **Limitations**: no Firebase credentials (index/query live checks NOT
+  AVAILABLE); no browser harness (rendered KPI/chart/EN-AR/RTL/responsive
+  checks NOT VERIFIED); no test accounts (role scoping NOT VERIFIED); the
+  Vercel dashboard itself cannot be inspected from this environment (deployment
+  confirmed via bundle fingerprinting only).
