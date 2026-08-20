@@ -613,3 +613,81 @@ npm run typecheck
 npm run lint
 npm run build
 ```
+
+# Task 7.3 — Manual Verification Script (Company & Area Performance)
+
+Run against a real Firebase project (or the emulators, Java 11+). **Deploy the
+four new composite indexes first** — without them the cross-scoped count
+queries fail with the "requires an index" error:
+
+```sh
+npx firebase deploy --only firestore:indexes
+```
+
+Prerequisites: an approved account for each role, at least two companies and
+two areas (OIL + GAS) with observations, and an AREA_AUTHORITY assigned to at
+least one area.
+
+## 35. Company Performance
+
+1. Load `/dashboard` → the Company Performance table shows one row per company:
+   Total, Open, Action Required, Under Verification, Closed, High Risk, Critical.
+2. Confirm the numbers match the Task 7.2 count queries (e.g. company A's Open
+   = `count(companyId == A, status == OPEN, <period>)`) via the Firestore
+   console.
+3. Confirm `Total = Open + Action Required + Under Verification + Closed` and
+   that DRAFT/ASSIGNED observations are excluded from Total.
+4. Confirm High Risk / Critical count across **all** statuses (a HIGH-risk
+   DRAFT still counts as High Risk — consistent with the Task 7.2 risk chart).
+5. Rows sort by Total descending; the company name links to
+   `/observations?company=<id>` and that page pre-filters to the company.
+
+## 36. Area Performance
+
+1. The Area Performance table shows one row per area: Area (number/name exactly
+   as stored), Section chip (OIL/GAS), Total, Open, Action Required, Under
+   Verification, Closed, High Risk, Critical — sorted by Total descending.
+2. Switch the OIL/GAS filter → only matching areas remain (no new queries).
+3. The area row links to `/observations?area=<id>` and that page pre-filters to
+   the area.
+
+## 37. Date-period filter
+
+1. Switch All / 7 / 30 / 90 days → both tables' counts change exactly like the
+   KPI cards (the period is pushed into every entity count query); an
+   out-of-window observation drops out of a company/area row.
+
+## 38. Role-aware scoping (direct Firestore, not just UI)
+
+- **COMPANY_REP**: the Company table shows only their company; the Area table
+  shows only areas where their company has observations (Total > 0); count
+  queries include `companyId == <their company>` (+ `areaId == <area>`).
+- **AREA_AUTHORITY**: the Area table shows only assigned areas; Company counts
+  include `areaId in <assigned areas>`; an authority with no active assignment
+  sees the empty state.
+- **PA / HSE / SUPER_ADMIN**: all companies/areas per the existing authorized
+  scope.
+- A raw count query that omits the scope filter and matches an unreadable
+  document → denied by the existing rules.
+
+## 39. Loading / empty / error states
+
+1. First load → sections show loading states (no premature zeros).
+2. Zero in-scope rows → empty state per section.
+3. Break connectivity/rules → ErrorCard with Retry per section.
+
+## 40. Responsive & language
+
+1. On mobile the tables scroll horizontally inside the card (no viewport
+   overflow).
+2. Switch to Arabic (RTL): titles, section filter, column headers and the
+   Section chip render in Arabic; numeric columns stay right-aligned on the
+   logical end.
+
+## 41. Build quality
+
+```sh
+npm run typecheck
+npm run lint
+npm run build
+```

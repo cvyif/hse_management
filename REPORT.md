@@ -274,3 +274,194 @@ and no test accounts — so live-data checks are recorded as NOT VERIFIED.
   checks NOT VERIFIED); no test accounts (role scoping NOT VERIFIED); the
   Vercel dashboard itself cannot be inspected from this environment (deployment
   confirmed via bundle fingerprinting only).
+
+---
+
+# Task 7.3 Report — Company & Area Performance
+
+Date: 2026-08-21
+
+## 1. Objective
+
+Extend the Dashboard with **Company Performance** and **Area Performance**
+sections built on the same scalable, server-side analytics architecture as
+Task 7.2 (Firestore `count()` aggregation — no observation downloads, no
+client-side statistics over full collections). Role scoping, the existing
+dashboard date-period filter and EN/AR + RTL are preserved, and both tables
+drill down into the existing Observation list.
+
+## 2. Scope
+
+- New `Company Performance` and `Area Performance` dashboard sections.
+- Drill-down links to `/observations?company=<id>` and `/observations?area=<id>`.
+- No new routes, no database redesign, no rules changes, no map changes, no
+  reports/export, no new notification types.
+
+## 3. Company Performance
+
+`CompanyPerformanceSection` renders one row per visible company: Company name,
+Total, Open, Action Required, Under Verification, Closed, High Risk, Critical.
+Rows sort by Total descending (highest first). Company names link to
+`/observations?company=<id>`.
+
+## 4. Area Performance
+
+`AreaPerformanceSection` renders one row per visible area: Area number/name
+(exactly as stored, e.g. "Area 175"), Section (OIL/GAS chip), Total, Open,
+Action Required, Under Verification, Closed, High Risk, Critical. Rows sort by
+Total descending and link to `/observations?area=<id>`. An OIL/GAS filter
+narrows the rows (presentational — each area belongs to exactly one section,
+so no extra queries). Company Representatives only see areas where their own
+company has observations (rows with Total > 0).
+
+## 5. Analytics Architecture
+
+`src/services/analytics.service.ts` gained `aggregateEntityPerformance`
+(extending the Task 7.2 aggregation service):
+
+- For each entity (company/area): a fixed set of server-side `count()`
+  queries — 5 operational status buckets (`OPERATIONAL_STATUSES`, now defined
+  in the service as the single source of truth) + 2 risk buckets (HIGH,
+  CRITICAL). `total` is the exact sum of the 5 statuses, so it is consistent
+  with the Task 7.2 KPIs (DRAFT/ASSIGNED excluded).
+- Risk counts span all statuses, exactly like the Task 7.2 risk chart (a
+  HIGH/CRITICAL draft is still a HIGH/CRITICAL risk) — documented for
+  consistency.
+- Entities are processed in batches (`PERFORMANCE_BATCH_SIZE = 8`) so at most
+  ~56 count queries are in flight at once; all results are exact server-side
+  aggregates. No observation documents are ever downloaded.
+
+## 6. Query Strategy
+
+Per entity: `7 × count()` queries (`(companyId|areaId) == id` + scope + date
+window + field). The per-entity equality pins the entity id, which is always
+within the role scope; the matching scope constraint on the same field is
+therefore omitted (`baseConstraints(scope, window, excludeField)`), avoiding
+redundant `in` + `==` on one field, while scope constraints on the *other*
+field remain applied so cross-entity scoping is never weakened. Query volume is
+`7 × (visible companies + visible areas)` and is bounded by the station's
+entity counts; the parallel-count pattern and batching keep latency low.
+
+## 7. Role Scoping
+
+Enforced in the query/service layer (not merely hidden in the UI):
+
+- **SUPER_ADMIN / HSE_MANAGER / HSE_OFFICER / PA**: full authorized scope —
+  all companies and all areas (their existing HSE observation scope).
+- **AREA_AUTHORITY**: only their assigned areas (per the existing
+  active-assignment/rotation `assignedAreaIds`). Company counts add
+  `areaId in assigned`; the area list and area counts are pinned to assigned
+  areas. `__no_areas__` yields an empty section.
+- **COMPANY_REP**: only their own company. The company table shows a single
+  row; area counts add `companyId == <their company>` and only areas with their
+  data are shown.
+
+The `companies`/`areas` collections are metadata readable by approved users
+(existing rules); the actual performance numbers are always scoped by the
+count queries above.
+
+## 8. Security
+
+`firestore.rules` and `storage.rules` are **unchanged**. Every count query
+carries the role scope (or a per-entity id that is within scope), so a count
+query can never match a document the user cannot read (which would fail the
+per-document read rule). No permissions are weakened, no approval gating or
+company/area isolation is bypassed.
+
+## 9. Filters
+
+- The existing dashboard date-period filter (`DashboardFilters` /
+  `useDashboardFilters`) drives both sections — the range is pushed into every
+  count query, so the tables respond to All / 7 / 30 / 90 days exactly like the
+  Task 7.2 analytics.
+- The Area section adds a lightweight OIL/GAS filter (presentational row
+  filter on `area.section`; no extra queries). The Company section has no
+  section filter because companies span sections — it is cleanly omitted
+  rather than half-supported.
+
+## 10. UI
+
+Dashboard structure now: KPI cards → Risk/Status/OIL-GAS/Type analytics →
+Company Performance → Area Performance. Both sections reuse `DashboardSection`,
+the `AdminTable`/`Th`/`Td`/`TRow` primitives (horizontal scroll on mobile),
+`LoadingCard`, `ErrorCard` (with Retry) and `EmptyState`. A shared
+`PerformanceTable` renders both tables (labelled entity column, optional
+Section chip, right-aligned tabular numbers); `SectionChip` colors OIL/GAS
+from the shared section palette. No new UI framework.
+
+## 11. Responsive Behavior
+
+`AdminTable` wraps the tables in `overflow-x-auto`, so on tablets/mobile the
+tables scroll horizontally instead of overflowing the viewport. Numeric
+alignment uses logical `text-end` so values mirror in RTL. The OIL/GAS control
+wraps under the section title on narrow screens.
+
+## 12. i18n
+
+New `dashboard.performance.*` keys (section titles/descriptions, section
+filter, column headers including `criticalRisk` → "Critical") and
+`observation.list.filterByCompany`/`allCompanies` were added to both `en.ts`
+and `ar.ts`. The section filter and OIL/GAS chip reuse the existing
+`sections.*` keys. Arabic renders RTL (logical properties throughout). No
+hardcoded user-facing English.
+
+## 13. Performance
+
+- No full-collection downloads: everything is `getCountFromServer`.
+- No N+1 explosion beyond the documented bounded `7 × entities`, with batched
+  parallelism (`PERFORMANCE_BATCH_SIZE`).
+- Counts refresh at 60 s via the existing dashboard React Query pattern.
+- The 60-second refetch reuses the exact Task 7.2 refresh approach.
+
+## 14. Indexes
+
+Four new composite indexes were added to `firestore.indexes.json` (all Task 7.2
+single-dimension queries reuse existing indexes):
+
+- `(areaId, companyId, status, createdAt)` and `(areaId, companyId, riskLevel,
+  createdAt)` — AREA_AUTHORITY company counts.
+- `(companyId, areaId, status, createdAt)` and `(companyId, areaId, riskLevel,
+  createdAt)` — COMPANY_REP area counts.
+
+Deploy before go-live with `npx firebase deploy --only firestore:indexes`
+(already documented in README for the Task 7.2 indexes).
+
+## 15. Verification
+
+Executed in this session:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Typecheck | `npm run typecheck` | Passed, 0 errors |
+| Lint | `npm run lint` | Passed, 0 warnings, 0 errors (112 files, oxlint) |
+| Production build | `npm run build` | Passed (vite 8.2.1, 219 modules) |
+| Dev-server smoke test | `npm run dev` + HTTP fetch | `/`, `/login`, `/register`, `/dashboard`, `/observations`, `/observations?company=…`, `/observations?area=…`, `/notifications`, `/map` all 200 |
+| Bundle content | marker scan of `dist` | Task 7.3 EN/AR strings present (Company Performance, Area Performance, Action Required, …) |
+
+RBAC/scoping reviewed by design (see §7): COMPANY_REP pinned to own company,
+AREA_AUTHORITY pinned to assigned areas, cross-entity scope filters applied in
+the count queries. **Not executed** (no Firebase credentials/emulator, no test
+accounts, no browser harness): live count-query results, the four new index
+builds, rendered loading/empty/error states per role, EN/AR/RTL/responsive
+visual checks. Follow `docs/verification.md` (§35) against a real project.
+
+## 16. Limitations
+
+- Live verification pending real Firebase credentials (the four new indexes and
+  the per-role count queries must be confirmed in a real project).
+- Per-entity counts are exact but require 7 count queries per entity; for very
+  large company/area counts this grows linearly. The smallest safe extension
+  (deferred) is a denormalized per-entity counters document maintained at
+  write time, or BigQuery-style external analytics.
+- Risk columns span all statuses (consistent with the Task 7.2 risk chart),
+  which is documented behaviour, not an error.
+- Area rows are shown for all visible areas (zeros included) except for Company
+  Representatives, where only areas with their data appear.
+
+## 17. Future Work
+
+- Map integration of company/area performance (explicitly out of scope here).
+- Interactive sorting/pagination of the performance tables (currently fixed
+  default sort by Total descending).
+- Reports/export (PDF/Excel/CSV) and scheduled reports.
+- Denormalized counters to reduce per-entity query count if the station grows.

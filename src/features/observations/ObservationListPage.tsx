@@ -33,6 +33,7 @@ export function ObservationListPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [riskFilter, setRiskFilter] = useState('')
   const [areaFilter, setAreaFilter] = useState(searchParams.get('area') ?? '')
+  const [companyFilter, setCompanyFilter] = useState(searchParams.get('company') ?? '')
   const [search, setSearch] = useState('')
 
   const canCreate = hasPermission(profile?.role, 'observation:create')
@@ -49,21 +50,31 @@ export function ObservationListPage() {
       if (statusFilter && observation.status !== statusFilter) return false
       if (riskFilter && observation.riskLevel !== riskFilter) return false
       if (areaFilter && observation.areaId !== areaFilter) return false
+      if (companyFilter && observation.companyId !== companyFilter) return false
       if (!q) return true
       return (
         observation.observationId.toLowerCase().includes(q) ||
         observation.description.toLowerCase().includes(q)
       )
     })
-  }, [observations.data, search, statusFilter, riskFilter, areaFilter])
+  }, [observations.data, search, statusFilter, riskFilter, areaFilter, companyFilter])
+
+  /** Set one URL filter param, preserving the others (drill-down friendly). */
+  function updateParam(key: 'area' | 'company', value: string) {
+    const next = new URLSearchParams(searchParams)
+    if (value) next.set(key, value)
+    else next.delete(key)
+    setSearchParams(next)
+  }
 
   function changeAreaFilter(value: string) {
     setAreaFilter(value)
-    if (value) {
-      setSearchParams({ area: value })
-    } else {
-      setSearchParams({})
-    }
+    updateParam('area', value)
+  }
+
+  function changeCompanyFilter(value: string) {
+    setCompanyFilter(value)
+    updateParam('company', value)
   }
 
   return (
@@ -110,6 +121,16 @@ export function ObservationListPage() {
               {RISK_LEVELS.map((risk) => (
                 <option key={risk} value={risk}>
                   {t(`observation.risk.${risk}`)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('observation.list.filterByCompany')} className="sm:w-44">
+            <Select value={companyFilter} onChange={(e) => changeCompanyFilter(e.target.value)}>
+              <option value="">{t('observation.list.allCompanies')}</option>
+              {(companies.data ?? []).map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
                 </option>
               ))}
             </Select>

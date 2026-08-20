@@ -1,18 +1,22 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
+import { useCompanies, useAreas } from '@/features/admin/hooks'
 import {
   periodRange,
   resolveDashboardScope,
+  visibleAreas,
+  visibleCompanies,
   type DashboardPeriod,
   type DashboardScope,
   type DateRange,
 } from '@/features/dashboard/dashboardLogic'
-import { aggregateObservationCounts } from '@/services/analytics.service'
+import { aggregateEntityPerformance, aggregateObservationCounts } from '@/services/analytics.service'
 import { useAuthStore } from '@/stores/auth.store'
 
 export const dashboardKeys = {
   analytics: ['dashboard', 'analytics'] as const,
+  performance: ['dashboard', 'performance'] as const,
 }
 
 /**
@@ -54,10 +58,71 @@ export function useDashboardScope(): DashboardScope {
 /**
  * Date/filter foundation: the selected period and its derived date range.
  * The range is pushed into the server-side count queries by
- * `useDashboardAnalytics`.
+ * `useDashboardAnalytics` / the performance hooks.
  */
 export function useDashboardFilters() {
   const [period, setPeriod] = useState<DashboardPeriod>('all')
   const range = useMemo(() => periodRange(period), [period])
   return { period, setPeriod, range }
+}
+
+/**
+ * Exact per-entity performance counts (Company/Area tables, Task 7.3). Runs a
+ * fixed, small set of server-side `count()` queries per entity — no document
+ * downloads. Role scope and date window are pushed into every query.
+ */
+export function useEntityPerformance(
+  field: 'companyId' | 'areaId',
+  ids: readonly string[],
+  scope: DashboardScope,
+  range: DateRange,
+) {
+  return useQuery({
+    queryKey: [
+      ...dashboardKeys.performance,
+      field,
+      ids.join('|'),
+      scope.companyId ?? 'all',
+      scope.areaIds ? scope.areaIds.join('|') : 'all',
+      range.from ?? 'all',
+      range.to ?? 'all',
+    ],
+    queryFn: () =>
+      aggregateEntityPerformance(
+        field,
+        ids,
+        scope,
+        {
+          from: range.from ?? undefined,
+          to: range.to ?? undefined,
+        },
+      ),
+    enabled: ids.length > 0,
+    // Counts are refreshed within a minute without a reload.
+    refetchInterval: 60_000,
+  })
+}
+
+/** Company Performance: the visible companies + their exact counts. */
+export function useCompanyPerformance(scope: DashboardScope, range: DateRange) {
+  const companies = useCompanies()
+  const visible = useMemo(
+    () => visibleCompanies(scope, companies.data ?? []),
+    [scope, companies.data],
+  )
+  const ids = useMemo(() => visible.map((company) => company.id), [visible])
+  const performance = useEntityPerformance('companyId', ids, scope, range)
+  return { companies, visible, performance }
+}
+
+/** Area Performance: the visible areas + their exact counts. */
+export function useAreaPerformance(scope: DashboardScope, range: DateRange) {
+  const areas = useAreas()
+  const visible = useMemo(
+    () => visibleAreas(scope, areas.data ?? []),
+    [scope, areas.data],
+  )
+  const ids = useMemo(() => visible.map((area) => area.id), [visible])
+  const performance = useEntityPerformance('areaId', ids, scope, range)
+  return { areas, visible, performance }
 }

@@ -7,6 +7,8 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorCard } from '@/features/admin/AsyncState'
 import { BarChart, DonutChart, StackedBar, type ChartDatum } from '@/features/dashboard/charts'
+import { AreaPerformanceSection } from '@/features/dashboard/AreaPerformanceSection'
+import { CompanyPerformanceSection } from '@/features/dashboard/CompanyPerformanceSection'
 import { DashboardFilters } from '@/features/dashboard/DashboardFilters'
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader'
 import { DashboardSection } from '@/features/dashboard/DashboardSection'
@@ -234,6 +236,9 @@ export function DashboardPage() {
           </div>
         </DashboardSection>
       )}
+
+      <CompanyPerformanceSection />
+      <AreaPerformanceSection />
     </div>
   )
 }

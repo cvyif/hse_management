@@ -1,27 +1,22 @@
-import type { Section } from '@/types/area'
+import type { Area, Section } from '@/types/area'
+import type { Company } from '@/types/company'
 import type { ObservationStatus, RiskLevel } from '@/types/observation'
 import type { UserProfile } from '@/types/user'
+import { OPERATIONAL_STATUSES } from '@/services/analytics.service'
 
 /**
- * Task 7.2 — Dashboard logic: pure, UI-free helpers for the analytics layer.
- *
- * All counts come from Firestore server-side `count()` aggregation
- * (`aggregateObservationCounts`); nothing here reads or filters full
- * documents. This file provides the role scope, the date/filter foundation
- * and the KPI/chart derivations built on those exact counts.
+ * Task 7.2/7.3 — Dashboard logic: pure, UI-free helpers for the analytics
+ * layer. All counts come from Firestore server-side `count()` aggregation
+ * (`aggregateObservationCounts` / `aggregateEntityPerformance`); nothing here
+ * reads or filters full documents. This file provides the role scope, the
+ * date/filter foundation, the KPI/chart derivations and the Company/Area
+ * performance scoping built on those exact counts.
  */
+
+export { OPERATIONAL_STATUSES }
 
 /** Statuses that are not part of the operational dashboard counts. */
 export const DASHBOARD_EXCLUDED_STATUSES: readonly ObservationStatus[] = ['DRAFT', 'ASSIGNED']
-
-/** Operational statuses shown on the dashboard (submitted + in lifecycle). */
-export const OPERATIONAL_STATUSES: readonly ObservationStatus[] = [
-  'OPEN',
-  'ACTION_REQUIRED',
-  'ACTION_SUBMITTED',
-  'UNDER_VERIFICATION',
-  'CLOSED',
-]
 
 /**
  * The scoped read window for dashboard analytics. Mirrors the Observation
@@ -48,6 +43,31 @@ export function resolveDashboardScope(profile: UserProfile | null): DashboardSco
     ...(companyId ? { companyId } : {}),
     ...(areaIds ? { areaIds } : {}),
   }
+}
+
+/**
+ * Companies visible in Company Performance. COMPANY_REP is pinned to their own
+ * company (the same scope the count queries enforce); every other approved
+ * role sees the full companies list (metadata is readable by approved users,
+ * while the actual counts are still scoped per role).
+ */
+export function visibleCompanies(scope: DashboardScope, companies: readonly Company[]): Company[] {
+  if (scope.companyId) return companies.filter((c) => c.id === scope.companyId)
+  return [...companies]
+}
+
+/**
+ * Areas visible in Area Performance. AREA_AUTHORITY is pinned to their
+ * assigned areas (matching the count-query scope; `__no_areas__` yields an
+ * empty list). All other roles see the full areas list.
+ */
+export function visibleAreas(scope: DashboardScope, areas: readonly Area[]): Area[] {
+  if (scope.areaIds && scope.areaIds.length > 0 && scope.areaIds[0] !== '__no_areas__') {
+    const allowed = new Set(scope.areaIds)
+    return areas.filter((area) => allowed.has(area.id))
+  }
+  if (scope.areaIds && scope.areaIds[0] === '__no_areas__') return []
+  return [...areas]
 }
 
 /** Preset dashboard periods driving the date/filter foundation. */
