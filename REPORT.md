@@ -173,5 +173,28 @@ real Firebase project, deploying the new indexes first.
 hse_management.git`). Vercel deployment remains BLOCKED pending credentials; the
 production URL and production smoke tests are pending that deployment.
 
-**Task 7.2 is NOT committed, pushed or deployed** — per instructions it awaits
-human approval, after which a dedicated CPD step will run.
+**Task 7.2 — CPD result (approved):**
+
+- **Commit**: `6a8d301` — `feat(dashboard): add scalable observation analytics`
+  (11 files, +873/−271), pushed PASS: `cb3266b..6a8d301 main -> main`.
+- **Vercel Deploy**: FAIL — no Vercel credentials available in this environment
+  (`VERCEL_TOKEN`/`VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` unset, no `~/.vercel`
+  auth, no repo `.vercel` linkage); the Vercel CLI hangs on its interactive
+  login prompt (no TTY) and produced no output before being killed. No
+  GitHub → Vercel integration is configured.
+- **Production URL**: none (deployment pending).
+- **Production Smoke Tests**: FAIL — not run (no deployment).
+- **Firebase Live Analytics Verification**: NOT VERIFIED — the `count()`
+  queries and 12 new composite indexes were not live-tested (no credentials;
+  emulator needs Java 11). This does not block the CPD but must be verified
+  before go-live (see `docs/verification.md` §29).
+- **To complete deployment**, run once on an interactive machine:
+  1. `vercel login` (or export `VERCEL_TOKEN`), then `vercel link` in the repo,
+     then `vercel --prod`, or
+  2. export `VERCEL_TOKEN` (+ optional `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID`)
+     and re-run this task's deploy step non-interactively, or
+  3. connect the GitHub repository to a Vercel project (GitHub → Vercel
+     integration) so pushes deploy automatically.
+- After deployment, run the production smoke checks (`/`, `/login`,
+  `/dashboard`, `/observations`, `/notifications`, `/map`) and confirm the
+  Dashboard loads without runtime errors.
