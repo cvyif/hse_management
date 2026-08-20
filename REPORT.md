@@ -162,3 +162,23 @@ reuses the already-verified list/map query pattern; follow
   extend `DashboardKpis`/`computeDashboardKpis`; charts consume
   `useDashboardFilters` for the period; the Site Map components can be embedded
   as a map panel; exact counts via Firestore `count()` aggregation.
+
+## 16. CPD (Commit / Push / Deploy) — Task 7.1
+
+Approved for release after human review. One full-app commit was created and
+pushed to GitHub (the repository previously contained only a one-line README
+stub, so the entire approved application — Phases 1–6 + Task 7.1 — was
+committed as a single changeset, per human decision).
+
+- **Commit**: `63042bd` — `feat: hse management system - phases 1-6 & dashboard foundation`
+- **Push**: PASS — `ff618db..63042bd main -> main` on `origin`
+  (`https://github.com/cvyif/hse_management.git`), working tree clean.
+- **Vercel Deploy**: BLOCKED — no Vercel credentials are available in this
+  environment (`VERCEL_TOKEN` unset, no `~/.vercel` auth, no repo `.vercel`
+  linkage; the Vercel CLI's interactive login cannot run without a TTY).
+- **To complete deployment**, run once on an interactive machine:
+  1. `vercel login` (or export `VERCEL_TOKEN`), then `vercel link` in the repo,
+     then `vercel --prod`, or
+  2. export `VERCEL_TOKEN` (+ optional `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID`)
+     and re-run this task's deploy step non-interactively.
+- Production smoke tests and the production URL are pending that deployment.
