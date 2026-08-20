@@ -285,9 +285,9 @@ export default {
       period: 'Period',
       periods: {
         all: 'All time',
-        last7: 'Last 7 days',
-        last30: 'Last 30 days',
-        last90: 'Last 90 days',
+        '7d': 'Last 7 days',
+        '30d': 'Last 30 days',
+        '90d': 'Last 90 days',
       },
       allHint: 'Showing all time',
       since: 'Since {{date}}',
@@ -301,10 +301,16 @@ export default {
     emptyHint: 'Observations submitted in your scope and period will appear here.',
     analytics: {
       title: 'Analytics',
-      description: 'Trend charts and detailed analytics arrive in a later task.',
-      empty: 'Analytics coming soon',
-      emptyHint:
-        'Trends, risk breakdowns and deeper analysis are built on this foundation in a later task.',
+      description: 'Exact server-side counts for your scope and the selected period.',
+    },
+    charts: {
+      riskTitle: 'Risk distribution',
+      statusTitle: 'Status breakdown',
+      sectionTitle: 'OIL vs GAS',
+      typeTitle: 'By observation type',
+      totalLabel: 'total',
+      other: 'Other',
+      noData: 'No observations in this period.',
     },
   },
   notifications: {

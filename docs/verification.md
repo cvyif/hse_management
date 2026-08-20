@@ -542,3 +542,74 @@ npm run typecheck
 npm run lint
 npm run build
 ```
+
+# Task 7.2 — Manual Verification Script (Scalable Observation Analytics & Accurate KPIs)
+
+Run against a real Firebase project (or the emulators, Java 11+). **Deploy the
+new composite indexes first** — without them the count queries fail with the
+"requires an index" error:
+
+```sh
+npx firebase deploy --only firestore:indexes
+```
+
+Prerequisites: an approved account for each role and at least one submitted
+Observation per status/risk/section/type bucket you want to verify.
+
+## 29. Count queries (server-side, no full downloads)
+
+1. Open the browser network tab, load `/dashboard`, and confirm the
+   `aggregateQuery` / count requests hit `runAggregationQuery` (Firestore
+   count) — **no** `listDocuments` / full-document GETs for the observations
+   collection.
+2. Confirm the counts for each bucket query match the Firestore console
+   (e.g. `status == OPEN` returns the same number as a console filter).
+3. Confirm the KPI totals are exact even with more than 1000 observations in
+   scope (the Task 7.1 bound is gone).
+
+## 30. Filters
+
+1. Switch All / 7 / 30 / 90 days: the count query adds `createdAt >= <from>`.
+   An observation older than the selected period drops out of every KPI and
+   chart; the caption shows "Since <date>" (EN) / "منذ <date>" (AR).
+2. With a period selected, confirm an out-of-window observation is excluded
+   even though it matches the role scope.
+
+## 31. KPI cards
+
+1. Total / Open / In progress / Closed match the status counts (OPEN → Open;
+   ACTION_REQUIRED + ACTION_SUBMITTED + UNDER_VERIFICATION → In progress;
+   CLOSED → Closed; DRAFT/ASSIGNED excluded from Total).
+2. While loading, cards show skeletons; on error the ErrorCard with Retry
+   appears; with zero in-scope observations the empty state shows (with the
+   "New Observation" CTA for creators).
+
+## 32. Charts
+
+1. **Risk**: donut totals + legend equal the risk counts; "Other" shows any
+   remainder (e.g. legacy types).
+2. **Status**: bars for OPEN / ACTION_REQUIRED / ACTION_SUBMITTED /
+   UNDER_VERIFICATION / CLOSED; percentages sum to 100% of the operational
+   total.
+3. **OIL vs GAS**: stacked bar + legend sum to the exact total.
+4. **Type**: one bar per type with an "Other" bucket; sum reconciles to total.
+5. Switch to Arabic (RTL): charts, legends and percentages mirror correctly.
+6. Resize to mobile: charts stack and stay readable.
+
+## 33. Role-aware scoping (direct Firestore, not just UI)
+
+- **COMPANY_REP**: count queries include `companyId == <their company>`; only
+  their company's observations count.
+- **AREA_AUTHORITY**: count queries include `areaId in <assigned areas>`; only
+  assigned areas count.
+- **PA / HSE / SUPER_ADMIN**: full authorized scope, no scope filter.
+- A raw count query that omits the scope filter and matches a document the user
+  cannot read → denied by the existing rules.
+
+## 34. Build quality
+
+```sh
+npm run typecheck
+npm run lint
+npm run build
+```

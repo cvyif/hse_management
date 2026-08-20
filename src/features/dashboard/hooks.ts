@@ -2,34 +2,45 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import {
-  DASHBOARD_OBSERVATION_LIMIT,
   periodRange,
   resolveDashboardScope,
   type DashboardPeriod,
   type DashboardScope,
+  type DateRange,
 } from '@/features/dashboard/dashboardLogic'
-import { listObservations } from '@/services/observation.service'
+import { aggregateObservationCounts } from '@/services/analytics.service'
 import { useAuthStore } from '@/stores/auth.store'
 
 export const dashboardKeys = {
-  observations: ['dashboard', 'observations'] as const,
+  analytics: ['dashboard', 'analytics'] as const,
 }
 
 /**
- * Role-aware scoped observation query backing the dashboard foundation. The
- * scope is resolved from the signed-in profile (Task 7.1 scoping foundation)
- * and the query is bounded to the newest `DASHBOARD_OBSERVATION_LIMIT`
- * records, exactly like the Site Map. Advanced aggregation is deferred.
+ * Role-aware, exact dashboard analytics. The scope is resolved from the
+ * signed-in profile (Task 7.1 scoping foundation) and the date window is
+ * pushed into the server-side count queries (Task 7.2): no observation
+ * documents are downloaded — every count is computed by Firestore.
  */
-export function useDashboardData(scope: DashboardScope) {
+export function useDashboardAnalytics(
+  scope: DashboardScope,
+  range: DateRange,
+  typeIds: readonly string[],
+) {
   return useQuery({
     queryKey: [
-      ...dashboardKeys.observations,
+      ...dashboardKeys.analytics,
       scope.companyId ?? 'all',
       scope.areaIds ? scope.areaIds.join('|') : 'all',
+      range.from ?? 'all',
+      range.to ?? 'all',
+      typeIds.join('|'),
     ],
-    queryFn: () => listObservations(scope, DASHBOARD_OBSERVATION_LIMIT),
-    // Stale counts are refreshed within a minute without a reload.
+    queryFn: () =>
+      aggregateObservationCounts(scope, {
+        from: range.from ?? undefined,
+        to: range.to ?? undefined,
+      }, typeIds),
+    // Counts are refreshed within a minute without a reload.
     refetchInterval: 60_000,
   })
 }
@@ -42,7 +53,8 @@ export function useDashboardScope(): DashboardScope {
 
 /**
  * Date/filter foundation: the selected period and its derived date range.
- * Future dashboard tasks reuse this to filter analytics by period.
+ * The range is pushed into the server-side count queries by
+ * `useDashboardAnalytics`.
  */
 export function useDashboardFilters() {
   const [period, setPeriod] = useState<DashboardPeriod>('all')

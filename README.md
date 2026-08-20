@@ -16,7 +16,8 @@ Built with React 19, TypeScript, Vite, Tailwind CSS v4 and Firebase
 - **Phase 5 — Notifications & Notification Center**: complete.
 - **Phase 6 — Site Map & Observation Map**: complete.
 - **Phase 7 — Dashboard & Analytics (Task 7.1 — Dashboard Foundation)**: complete.
-  See `REPORT.md` for the detailed Task 7.1 report and the roadmap.
+- **Phase 7 — Dashboard & Analytics (Task 7.2 — Scalable Observation Analytics & Accurate KPIs)**: complete.
+  See `REPORT.md` for the detailed Task 7.1/7.2 reports and the roadmap.
 
 Phase 3 adds the Observation workflow: a 6-step New Observation wizard
 (company, area with auto-derived section, permit, details, evidence, review),
@@ -75,6 +76,23 @@ the Observation list/map scoping exactly (Company Rep → company only, Area
 Authority → assigned areas only), so every role sees only its authorized data.
 Analytics, trends and charts are intentionally **not** implemented yet — Tasks
 7.2–7.6 extend this foundation.
+
+Task 7.2 delivers **scalable, exact analytics** on that foundation. Every KPI
+and chart now comes from Firestore server-side `count()` aggregation
+(`getCountFromServer`) — no observation documents are downloaded to the
+browser, so counts are exact at any collection size and the previous
+newest-1000 bound is gone. The selected period is pushed into those queries
+and role scoping is applied identically to the list/map (Company Rep → company
+only, Area Authority → assigned areas only), so the existing security rules
+are unchanged. The dashboard now shows Total / Open / In progress / Closed
+KPIs plus four charts: risk distribution (donut), status breakdown (bars),
+OIL vs GAS (stacked bar) and per-observation-type bars, all rendered with
+dependency-free RTL-safe SVG components and localized EN/AR. Twelve new
+composite indexes back the count queries — deploy them before go-live:
+
+```sh
+npx firebase deploy --only firestore:indexes
+```
 
 ## Getting started
 
