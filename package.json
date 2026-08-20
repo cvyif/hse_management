@@ -1,0 +1,41 @@
+{
+  "name": "hse-management",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "bootstrap:admin": "node scripts/bootstrap-super-admin.mjs",
+    "seed:observations": "node scripts/seed-observation-types.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "firebase": "^12.17.1",
+    "i18next": "^26.3.6",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-i18next": "^17.0.11",
+    "react-router-dom": "^7.18.2",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "firebase-admin": "^14.2.0",
+    "oxlint": "^1.78.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.3",
+    "vite": "^8.2.1"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.2": true,
+    "protobufjs@7.6.5": true
+  }
+}

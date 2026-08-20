@@ -1,0 +1,842 @@
+// HSE Management System — Firestore security rules (Phase 5).
+//
+// Phase 2 enforces the administration model (self-registration, Super Admin
+// control, company isolation, append-only audit).
+//
+// Phase 3 enforces the Observation model (reporting, DRAFT -> OPEN, sequential
+// IDs, evidence, area-derived sections).
+//
+// Phase 4 enforces the Corrective Action lifecycle and HSE verification:
+//   - HSE verifiers (HSE Manager/HSE Officer/Super Admin) request, review,
+//     accept, return and close. PA reviews but never verifies.
+//   - Company Representatives submit corrective actions for their own
+//     company's Observations only (company isolation enforced on every read,
+//     write and Storage upload).
+//   - The workflow is enforced: OPEN -> ACTION_REQUIRED -> ACTION_SUBMITTED
+//     -> UNDER_VERIFICATION -> CLOSED (or return UNDER_VERIFICATION ->
+//     ACTION_REQUIRED). Clients cannot write arbitrary statuses; every
+//     transition is validated against the Observation's committed state and
+//     the corrective-action document (transitions are committed in two
+//     ordered steps so each rule validates against committed state).
+//   - Closed Observations and ACCEPTED corrective actions are immutable.
+//   - Audit records remain append-only; company reps record only their
+//     submission event.
+//
+// Phase 5 enforces the Notification Center:
+//   - Notifications are created CLIENT-SIDE (no backend), so every creation
+//     is validated against the committed entity state and the recipient's
+//     real relationship: the actor must be the event's author and the
+//     recipient must be an active HSE reviewer, an Area Authority assigned to
+//     the observation area, or a Company Representative of the responsible
+//     company. i18n keys must match the type, and the document id must equal
+//     the dedupe key (re-writing an existing id routes to `update`, which the
+//     non-recipient actor can never satisfy -> idempotent).
+//   - Users read is relaxed narrowly: Company Representatives may read
+//     HSE-reviewer-role users (needed to resolve reviewers when submitting).
+//     Users update gains an HSE Manager / Super Admin branch that may only
+//     maintain `assignedAreaIds` on AREA_AUTHORITY users (drives area scoping
+//     and notifications).
+//   - Area Authorities gain scoped `observation:read`/`corrective_action:read`
+//     limited to their `assignedAreaIds`, so notification links navigate.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Shared helpers -------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    function me() {
+      return userData(request.auth.uid);
+    }
+
+    // Approval is status == APPROVED AND account not deactivated.
+    function isApproved() {
+      return isSignedIn() && me().status == 'APPROVED' && me().active == true;
+    }
+
+    function hasRole(role) {
+      return isApproved() && me().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('SUPER_ADMIN');
+    }
+
+    function isHse() {
+      return isApproved() &&
+        (me().role == 'HSE_MANAGER' ||
+         me().role == 'HSE_OFFICER' ||
+         me().role == 'PA');
+    }
+
+    function isCompanyRep() {
+      return hasRole('COMPANY_REP');
+    }
+
+    // Only non-administrative roles may be requested at registration.
+    function isValidRequestedRole() {
+      return request.resource.data.requestedRole in
+        ['HSE_MANAGER', 'HSE_OFFICER', 'PA', 'AREA_AUTHORITY', 'COMPANY_REP'];
+    }
+
+    // Self-registration contract: PENDING, no role, valid requested role,
+    // email matches the authenticated identity. Company assignment for
+    // COMPANY_REP is performed by the Super Admin during approval.
+    function isPendingSelfRegistration() {
+      return request.resource.data.uid == request.auth.uid &&
+             request.resource.data.status == 'PENDING' &&
+             request.resource.data.active == true &&
+             lower(request.resource.data.email) == request.auth.token.email &&
+             !('role' in request.resource.data) &&
+             isValidRequestedRole();
+    }
+
+    // Phase 3 Observation reporters: HSE operational roles + Super Admin.
+    function canCreateObservation() {
+      return isHse() || isAdmin();
+    }
+
+    // ---------- Observation helpers --------------------------------------
+
+    function getCompany(companyId) {
+      return get(/databases/$(database)/documents/companies/$(companyId)).data;
+    }
+
+    function getArea(areaId) {
+      return get(/databases/$(database)/documents/areas/$(areaId)).data;
+    }
+
+    function getObservationType(typeId) {
+      return get(/databases/$(database)/documents/observationTypes/$(typeId)).data;
+    }
+
+    function getObservation(id) {
+      return get(/databases/$(database)/documents/observations/$(id));
+    }
+
+    // OBS-YYYY-NNNNN whose year matches the server clock and whose sequence
+    // is within the reserved counter range. Together with the document-id
+    // uniqueness this blocks hand-crafted, duplicate or out-of-range IDs.
+    function isValidObservationId() {
+      return id.matches('^OBS-[0-9]{4}-[0-9]{5}$') &&
+             id.split('-')[1] == string(request.time.year()) &&
+             int(id.split('-')[2]) >= 1 &&
+             int(id.split('-')[2]) <=
+               get(/databases/$(database)/documents/counters/observationIds).data.sequence;
+    }
+
+    function isValidPermit() {
+      return request.resource.data.permit.type in
+               ['COLD', 'SPARK', 'HOT', 'BREAKING_CONTAINMENT', 'NOT_APPLICABLE'] &&
+             (request.resource.data.permit.type == 'NOT_APPLICABLE'
+               ? (!('number' in request.resource.data.permit) ||
+                  request.resource.data.permit.number == '')
+               : (request.resource.data.permit.number is string &&
+                  request.resource.data.permit.number.matches('[0-9]{1,10}')));
+    }
+
+    function validMapPosition() {
+      return request.resource.data.mapPosition.x >= 0 &&
+             request.resource.data.mapPosition.x <= 1 &&
+             request.resource.data.mapPosition.y >= 0 &&
+             request.resource.data.mapPosition.y <= 1;
+    }
+
+    function validEvidenceItem(item) {
+      return item.uploadedBy == request.auth.uid &&
+             item.sizeBytes is int &&
+             item.sizeBytes >= 0 &&
+             item.sizeBytes <= 10485760 &&
+             item.storagePath.matches('^evidence/' + resource.data.id + '/[^/]+$') &&
+             item.contentType.matches(
+               '^(image/(jpeg|png|gif|webp|heic|heif)|' +
+               'application/pdf|application/msword|application/vnd\\.ms-excel|' +
+               'application/vnd\\.openxmlformats-officedocument\\..*|text/csv)$');
+    }
+
+    function validEvidence() {
+      return request.resource.data.evidence is list &&
+             request.resource.data.evidence.size() <= 20 &&
+             request.resource.data.evidence.all(validEvidenceItem);
+    }
+
+    // Full content validation required whenever the resulting state is OPEN.
+    function isValidOpenContent() {
+      return request.resource.data.status == 'OPEN' &&
+             request.resource.data.observationId == id &&
+             isValidObservationId() &&
+             request.resource.data.companyId is string &&
+             getCompany(request.resource.data.companyId).active == true &&
+             request.resource.data.areaId is string &&
+             getArea(request.resource.data.areaId).active == true &&
+             getArea(request.resource.data.areaId).section == request.resource.data.section &&
+             isValidPermit() &&
+             request.resource.data.observationTypeId is string &&
+             getObservationType(request.resource.data.observationTypeId).active == true &&
+             request.resource.data.riskLevel in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] &&
+             request.resource.data.description is string &&
+             request.resource.data.description.size() >= 1 &&
+             request.resource.data.description.size() <= 10000 &&
+             (!('immediateAction' in request.resource.data) ||
+              (request.resource.data.immediateAction is string &&
+               request.resource.data.immediateAction.size() <= 5000)) &&
+             validEvidence() &&
+             (!('mapPosition' in request.resource.data) || validMapPosition());
+    }
+
+    // Audit/history fields that clients may never write.
+    function hasNoForbiddenContextFields() {
+      return !('areaAuthorityId' in request.resource.data) &&
+             !('dueDate' in request.resource.data) &&
+             !('closedAt' in request.resource.data) &&
+             !('closedBy' in request.resource.data);
+    }
+
+    // ---------- Phase 4 corrective-action helpers -------------------------
+
+    function getCorrectiveAction(observationId) {
+      return get(/databases/$(database)/documents/correctiveActions/$(observationId)).data;
+    }
+
+    function isHseManager() {
+      return hasRole('HSE_MANAGER');
+    }
+
+    function isHseOfficer() {
+      return hasRole('HSE_OFFICER');
+    }
+
+    // Verification authority: HSE Manager, HSE Officer, Super Admin.
+    // PA reviews but does not verify (documented RBAC decision).
+    function canVerifyAction() {
+      return isApproved() && (isHseManager() || isHseOfficer() || isAdmin());
+    }
+
+    // Company Representatives submit corrective actions for their company.
+    function canSubmitAction() {
+      return isApproved() && isCompanyRep();
+    }
+
+    // Observation content fields that a workflow transition must not change.
+    function observationContentUnchanged() {
+      return request.resource.data.companyId == resource.data.companyId &&
+             request.resource.data.areaId == resource.data.areaId &&
+             request.resource.data.section == resource.data.section &&
+             request.resource.data.permit == resource.data.permit &&
+             request.resource.data.observationTypeId == resource.data.observationTypeId &&
+             request.resource.data.riskLevel == resource.data.riskLevel &&
+             request.resource.data.description == resource.data.description &&
+             request.resource.data.immediateAction == resource.data.immediateAction &&
+             request.resource.data.mapPosition == resource.data.mapPosition &&
+             request.resource.data.evidence == resource.data.evidence;
+    }
+
+    // Reporter + audit fields that must remain unchanged on any transition.
+    function observationReporterAndHistoryUnchanged() {
+      return request.resource.data.id == resource.data.id &&
+             request.resource.data.observationId == resource.data.observationId &&
+             request.resource.data.reporterId == resource.data.reporterId &&
+             request.resource.data.reporterName == resource.data.reporterName &&
+             request.resource.data.reporterRole == resource.data.reporterRole &&
+             request.resource.data.reporterCompanyId == resource.data.reporterCompanyId &&
+             request.resource.data.createdAt == resource.data.createdAt &&
+             request.resource.data.submittedAt == resource.data.submittedAt;
+    }
+
+    function validActionEvidenceItem(item) {
+      return item.uploadedBy == request.auth.uid &&
+             item.sizeBytes is int &&
+             item.sizeBytes >= 0 &&
+             item.sizeBytes <= 10485760 &&
+             item.storagePath.matches(
+               '^correctiveActionEvidence/' + id + '/[^/]+$') &&
+             item.contentType.matches(
+               '^(image/(jpeg|png|gif|webp|heic|heif)|' +
+               'application/pdf|application/msword|application/vnd\\.ms-excel|' +
+               'application/vnd\\.openxmlformats-officedocument\\..*|text/csv)$');
+    }
+
+    function validActionEvidence() {
+      return request.resource.data.evidence is list &&
+             request.resource.data.evidence.size() <= 20 &&
+             request.resource.data.evidence.all(validActionEvidenceItem);
+    }
+
+    // Company submission must not introduce verification fields.
+    function noActionVerificationFields() {
+      return !('verifiedBy' in request.resource.data) &&
+             !('verifiedAt' in request.resource.data) &&
+             !('returnedBy' in request.resource.data) &&
+             !('returnedAt' in request.resource.data) &&
+             !('returnReason' in request.resource.data);
+    }
+
+    // Verification fields may be retained (e.g. a previous return) but never
+    // changed outside the verdict write that owns them.
+    function actionVerificationFieldsUnchanged() {
+      return (!('verifiedBy' in request.resource.data) ||
+              request.resource.data.verifiedBy == resource.data.verifiedBy) &&
+             (!('verifiedAt' in request.resource.data) ||
+              request.resource.data.verifiedAt == resource.data.verifiedAt) &&
+             (!('returnedBy' in request.resource.data) ||
+              request.resource.data.returnedBy == resource.data.returnedBy) &&
+             (!('returnedAt' in request.resource.data) ||
+              request.resource.data.returnedAt == resource.data.returnedAt) &&
+             (!('returnReason' in request.resource.data) ||
+              request.resource.data.returnReason == resource.data.returnReason);
+    }
+
+    // ---------- users -----------------------------------------------------
+
+    match /users/{uid} {
+      allow create: if isSignedIn() && isPendingSelfRegistration();
+
+      // Self always; otherwise approved users, with company isolation for
+      // Company Representatives. Phase 5 relaxes the isolation narrowly so
+      // reps can read HSE-reviewer-role users (HSE Manager/HSE Officer/Super
+      // Admin) — needed to resolve reviewers when creating the SUBMITTED
+      // notification. No other roles are exposed.
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        (isApproved() &&
+          (!isCompanyRep() ||
+           resource.data.companyId == me().companyId ||
+           resource.data.role in ['HSE_MANAGER', 'HSE_OFFICER', 'SUPER_ADMIN']))
+      );
+
+      // Self-service edits to non-authorization fields, OR Super Admin
+      // managing OTHER users, OR (Phase 5) HSE Manager / Super Admin
+      // maintaining ONLY `assignedAreaIds` on OTHER users (assignment service
+      // keeps the area scoping/notification routing current; all other fields
+      // must remain unchanged and the target can never be SUPER_ADMIN).
+      // SUPER_ADMIN role is never assignable.
+      allow update: if isSignedIn() && (
+        (request.auth.uid == uid &&
+         request.resource.data.uid == resource.data.uid &&
+         request.resource.data.email == resource.data.email &&
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.status == resource.data.status &&
+         request.resource.data.active == resource.data.active &&
+         request.resource.data.companyId == resource.data.companyId &&
+         request.resource.data.requestedRole == resource.data.requestedRole &&
+         request.resource.data.assignedAreaIds == resource.data.assignedAreaIds &&
+         request.resource.data.approvedBy == resource.data.approvedBy &&
+         request.resource.data.approvedAt == resource.data.approvedAt &&
+         request.resource.data.rejectedBy == resource.data.rejectedBy &&
+         request.resource.data.rejectedAt == resource.data.rejectedAt &&
+         request.resource.data.rejectedReason == resource.data.rejectedReason) ||
+        (isAdmin() && uid != request.auth.uid &&
+         request.resource.data.uid == resource.data.uid &&
+         request.resource.data.email == resource.data.email &&
+         request.resource.data.role != 'SUPER_ADMIN') ||
+        ((isHseManager() || isAdmin()) && uid != request.auth.uid &&
+         request.resource.data.uid == resource.data.uid &&
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.role != 'SUPER_ADMIN' &&
+         request.resource.data.email == resource.data.email &&
+         request.resource.data.displayName == resource.data.displayName &&
+         request.resource.data.phone == resource.data.phone &&
+         request.resource.data.language == resource.data.language &&
+         request.resource.data.status == resource.data.status &&
+         request.resource.data.active == resource.data.active &&
+         request.resource.data.companyId == resource.data.companyId &&
+         request.resource.data.requestedRole == resource.data.requestedRole &&
+         request.resource.data.approvedBy == resource.data.approvedBy &&
+         request.resource.data.approvedAt == resource.data.approvedAt &&
+         request.resource.data.rejectedBy == resource.data.rejectedBy &&
+         request.resource.data.rejectedAt == resource.data.rejectedAt &&
+         request.resource.data.rejectedReason == resource.data.rejectedReason &&
+         request.resource.data.assignedAreaIds is list &&
+         request.resource.data.assignedAreaIds.all(
+           (areaId) => getArea(areaId).active == true))
+      );
+
+      // Status-based deactivation instead of deletion.
+      allow delete: if false;
+    }
+
+    // ---------- companies -------------------------------------------------
+
+    // Readable by approved users; written by Super Admin only.
+    match /companies/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- areas -----------------------------------------------------
+
+    // Areas hold their own normalized map position (Phase 6): the Site Map
+    // reads it directly and administrative writes validate it is a 0..1 map.
+    // Only Super Admin may write areas (positions included).
+    match /areas/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin() &&
+        request.resource.data.mapPosition is map && validMapPosition();
+    }
+
+    // ---------- rotations -------------------------------------------------
+
+    match /rotations/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- area authority assignments --------------------------------
+
+    match /areaAuthorityAssignments/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- observation types -----------------------------------------
+
+    // Database-driven Observation Types. Readable by approved users (needed
+    // for the creation form); managed via Admin SDK/seed script or admin UI.
+    match /observationTypes/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- ID counter -------------------------------------------------
+
+    // Single monotonic counter used to generate OBS-YYYY-NNNNN ids safely
+    // under concurrent creation. The sequence may only advance by one, or
+    // reset to 1 when the year changes. Seeded by `npm run seed:observations`
+    // (or bootstrapped atomically on first use with sequence 1).
+    match /counters/observationIds {
+      allow read: if isApproved();
+      allow create: if isApproved() && canCreateObservation() &&
+        request.resource.data.year == request.time.year() &&
+        request.resource.data.sequence == 1;
+      allow update: if isApproved() && canCreateObservation() &&
+        request.resource.data.year is int &&
+        request.resource.data.sequence is int &&
+        (
+          (request.resource.data.year == resource.data.year &&
+           request.resource.data.sequence == resource.data.sequence + 1) ||
+          (request.resource.data.year != resource.data.year &&
+           request.resource.data.sequence == 1)
+        );
+      allow delete: if false;
+    }
+
+    // ---------- observations ----------------------------------------------
+
+    match /observations/{id} {
+      // Create a DRAFT. The document id equals the human-readable
+      // Observation ID; the reporter snapshot must match the authenticated
+      // user; evidence starts empty and audit/history fields are forbidden.
+      allow create: if isApproved() && canCreateObservation() &&
+        request.resource.data.id == id &&
+        request.resource.data.observationId == id &&
+        request.resource.data.status == 'DRAFT' &&
+        isValidObservationId() &&
+        request.resource.data.reporterId == request.auth.uid &&
+        request.resource.data.reporterName == me().displayName &&
+        request.resource.data.reporterRole == me().role &&
+        request.resource.data.reporterCompanyId == me().companyId &&
+        request.resource.data.evidence is list &&
+        request.resource.data.evidence.size() == 0 &&
+        request.resource.data.timeline is list &&
+        request.resource.data.timeline.size() == 1 &&
+        request.resource.data.createdAt is int &&
+        request.resource.data.updatedAt is int &&
+        hasNoForbiddenContextFields() &&
+        !('submittedAt' in request.resource.data);
+
+      // Read: HSE roles, Super Admin, the reporter, or (Phase 4) a Company
+      // Representative scoped to their own company's Observations, or
+      // (Phase 5) an Area Authority scoped to their assigned areas.
+      allow read: if isApproved() &&
+        (isHse() || isAdmin() || resource.data.reporterId == request.auth.uid ||
+         (isCompanyRep() && resource.data.companyId == me().companyId) ||
+         (hasRole('AREA_AUTHORITY') &&
+          resource.data.areaId in me().assignedAreaIds));
+
+      // Update paths:
+      //   (1) the reporter edits/submits their own DRAFT (Phase 3);
+      //   (2) a Company Representative submits the corrective action
+      //       (ACTION_REQUIRED -> ACTION_SUBMITTED);
+      //   (3) an HSE verifier drives the verification lifecycle.
+      // Every path enforces the exact allowed transition, immutable fields and
+      // (where relevant) the committed corrective-action state — the workflow
+      // cannot be bypassed by writing an arbitrary status.
+      allow update: if isApproved() && request.resource.data.updatedAt is int && (
+        (
+          // (1) Reporter DRAFT editing / submission.
+          resource.data.reporterId == request.auth.uid &&
+          resource.data.status == 'DRAFT' &&
+          request.resource.data.status in ['DRAFT', 'OPEN'] &&
+          request.resource.data.id == resource.data.id &&
+          request.resource.data.observationId == resource.data.observationId &&
+          request.resource.data.reporterId == request.auth.uid &&
+          request.resource.data.reporterName == resource.data.reporterName &&
+          request.resource.data.reporterRole == resource.data.reporterRole &&
+          request.resource.data.reporterCompanyId == resource.data.reporterCompanyId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          hasNoForbiddenContextFields() &&
+          (
+            (request.resource.data.status == 'DRAFT' &&
+             request.resource.data.evidence == resource.data.evidence &&
+             request.resource.data.timeline == resource.data.timeline &&
+             !('submittedAt' in request.resource.data)) ||
+            (request.resource.data.status == 'OPEN' &&
+             request.resource.data.submittedAt is int &&
+             request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+             isValidOpenContent())
+          )
+        ) ||
+        (
+          // (2) Company Representative submits the corrective action.
+          isCompanyRep() &&
+          resource.data.status == 'ACTION_REQUIRED' &&
+          request.resource.data.status == 'ACTION_SUBMITTED' &&
+          resource.data.companyId == me().companyId &&
+          observationContentUnchanged() &&
+          observationReporterAndHistoryUnchanged() &&
+          hasNoForbiddenContextFields() &&
+          request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+          request.resource.data.timeline[resource.data.timeline.size()].to == 'ACTION_SUBMITTED' &&
+          getCorrectiveAction(resource.data.id).status == 'SUBMITTED'
+        ) ||
+        (
+          // (3) HSE verification lifecycle.
+          canVerifyAction() &&
+          observationContentUnchanged() &&
+          observationReporterAndHistoryUnchanged() &&
+          (
+            // OPEN -> ACTION_REQUIRED (request)
+            (resource.data.status == 'OPEN' && request.resource.data.status == 'ACTION_REQUIRED' &&
+             request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+             request.resource.data.timeline[resource.data.timeline.size()].to == 'ACTION_REQUIRED' &&
+             getCorrectiveAction(resource.data.id).status == 'REQUIRED') ||
+            // ACTION_SUBMITTED -> UNDER_VERIFICATION (begin verification)
+            (resource.data.status == 'ACTION_SUBMITTED' && request.resource.data.status == 'UNDER_VERIFICATION' &&
+             request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+             request.resource.data.timeline[resource.data.timeline.size()].to == 'UNDER_VERIFICATION' &&
+             getCorrectiveAction(resource.data.id).status == 'UNDER_VERIFICATION') ||
+            // UNDER_VERIFICATION -> CLOSED (accept)
+            (resource.data.status == 'UNDER_VERIFICATION' && request.resource.data.status == 'CLOSED' &&
+             request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+             request.resource.data.timeline[resource.data.timeline.size()].to == 'CLOSED' &&
+             request.resource.data.closedAt is int &&
+             request.resource.data.closedBy == request.auth.uid &&
+             getCorrectiveAction(resource.data.id).status == 'ACCEPTED') ||
+            // UNDER_VERIFICATION -> ACTION_REQUIRED (return)
+            (resource.data.status == 'UNDER_VERIFICATION' && request.resource.data.status == 'ACTION_REQUIRED' &&
+             request.resource.data.timeline.size() == resource.data.timeline.size() + 1 &&
+             request.resource.data.timeline[resource.data.timeline.size()].to == 'ACTION_REQUIRED' &&
+             getCorrectiveAction(resource.data.id).status == 'RETURNED')
+          )
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------- corrective actions ----------------------------------------
+
+    // One active corrective action per Observation (document id ==
+    // observationId). HSE creates the request; the responsible Company
+    // Representative submits; HSE verifies (accept -> close, return ->
+    // ACTION_REQUIRED). The company can never verify/close anything.
+    match /correctiveActions/{id} {
+      // Create: an HSE verifier requests the action for an OPEN Observation.
+      allow create: if isApproved() && canVerifyAction() &&
+        request.resource.data.id == id &&
+        request.resource.data.correctiveActionId == id &&
+        request.resource.data.observationId == id &&
+        request.resource.data.companyId == getObservation(id).data.companyId &&
+        getObservation(id).data.status == 'OPEN' &&
+        request.resource.data.status == 'REQUIRED' &&
+        request.resource.data.description == '' &&
+        request.resource.data.evidence is list &&
+        request.resource.data.evidence.size() == 0 &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt is int &&
+        request.resource.data.updatedAt is int &&
+        noActionVerificationFields();
+
+      // Read: HSE (incl. PA review) / Super Admin, the responsible company, or
+      // (Phase 5) an Area Authority scoped to the observation's assigned area.
+      allow read: if isApproved() && (
+        isHse() || isAdmin() ||
+        (isCompanyRep() && resource.data.companyId == me().companyId) ||
+        (hasRole('AREA_AUTHORITY') &&
+         getObservation(resource.data.observationId).data.areaId in me().assignedAreaIds)
+      );
+
+      // Update:
+      //   (A) the Company Representative submits (REQUIRED|RETURNED -> SUBMITTED)
+      //       when the Observation is ACTION_REQUIRED and belongs to them;
+      //   (B) an HSE verifier transitions the action lifecycle.
+      allow update: if isApproved() && request.resource.data.updatedAt is int && (
+        (
+          // (A) Company submission.
+          isCompanyRep() &&
+          resource.data.companyId == me().companyId &&
+          getObservation(id).data.companyId == me().companyId &&
+          getObservation(id).data.status == 'ACTION_REQUIRED' &&
+          resource.data.status in ['REQUIRED', 'RETURNED'] &&
+          request.resource.data.status == 'SUBMITTED' &&
+          request.resource.data.id == resource.data.id &&
+          request.resource.data.correctiveActionId == resource.data.correctiveActionId &&
+          request.resource.data.observationId == resource.data.observationId &&
+          request.resource.data.companyId == resource.data.companyId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.submittedBy == request.auth.uid &&
+          request.resource.data.submittedByName == me().displayName &&
+          request.resource.data.submittedAt is int &&
+          request.resource.data.description is string &&
+          request.resource.data.description.size() >= 1 &&
+          request.resource.data.description.size() <= 5000 &&
+          validActionEvidence() &&
+          noActionVerificationFields()
+        ) ||
+        (
+          // (B) HSE verification lifecycle.
+          canVerifyAction() &&
+          request.resource.data.id == resource.data.id &&
+          request.resource.data.correctiveActionId == resource.data.correctiveActionId &&
+          request.resource.data.observationId == resource.data.observationId &&
+          request.resource.data.companyId == resource.data.companyId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.description == resource.data.description &&
+          request.resource.data.evidence == resource.data.evidence &&
+          request.resource.data.submittedBy == resource.data.submittedBy &&
+          request.resource.data.submittedByName == resource.data.submittedByName &&
+          request.resource.data.submittedAt == resource.data.submittedAt &&
+          (
+            // SUBMITTED -> UNDER_VERIFICATION
+            (resource.data.status == 'SUBMITTED' && request.resource.data.status == 'UNDER_VERIFICATION' &&
+             getObservation(id).data.status == 'ACTION_SUBMITTED' &&
+             actionVerificationFieldsUnchanged()) ||
+            // UNDER_VERIFICATION -> ACCEPTED
+            (resource.data.status == 'UNDER_VERIFICATION' && request.resource.data.status == 'ACCEPTED' &&
+             getObservation(id).data.status == 'UNDER_VERIFICATION' &&
+             request.resource.data.verifiedBy == request.auth.uid &&
+             request.resource.data.verifiedAt is int &&
+             (!('returnedBy' in request.resource.data) ||
+              request.resource.data.returnedBy == resource.data.returnedBy) &&
+             (!('returnedAt' in request.resource.data) ||
+              request.resource.data.returnedAt == resource.data.returnedAt) &&
+             (!('returnReason' in request.resource.data) ||
+              request.resource.data.returnReason == resource.data.returnReason)) ||
+            // UNDER_VERIFICATION -> RETURNED
+            (resource.data.status == 'UNDER_VERIFICATION' && request.resource.data.status == 'RETURNED' &&
+             getObservation(id).data.status == 'UNDER_VERIFICATION' &&
+             request.resource.data.returnedBy == request.auth.uid &&
+             request.resource.data.returnedAt is int &&
+             request.resource.data.returnReason is string &&
+             request.resource.data.returnReason.size() >= 1 &&
+             request.resource.data.returnReason.size() <= 2000 &&
+             (!('verifiedBy' in request.resource.data) ||
+              request.resource.data.verifiedBy == resource.data.verifiedBy) &&
+             (!('verifiedAt' in request.resource.data) ||
+              request.resource.data.verifiedAt == resource.data.verifiedAt))
+          )
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------- notifications ---------------------------------------------
+
+    // Notifications are created CLIENT-SIDE by the notification service right
+    // after the business event commits (no backend exists yet). Creation is
+    // therefore validated strictly: the actor must be the event's author, the
+    // recipient must be a real relationship, i18n keys must match the type and
+    // the document id must equal the dedupe key. Re-writing an existing id
+    // routes through `update`, which the non-recipient actor can never
+    // satisfy — so duplicate creation is rejected (idempotent).
+    match /notifications/{id} {
+      // The recipient must exist and be approved/active.
+      function notificationRecipientState(uid) {
+        let user = userData(uid);
+        return user.status == 'APPROVED' && user.active == true;
+      }
+
+      function recipientIsHse(uid) {
+        return notificationRecipientState(uid) &&
+               userData(uid).role in ['HSE_MANAGER', 'HSE_OFFICER'];
+      }
+
+      function recipientIsAreaAuthority(uid, areaId) {
+        return notificationRecipientState(uid) &&
+               userData(uid).role == 'AREA_AUTHORITY' &&
+               areaId in userData(uid).assignedAreaIds;
+      }
+
+      function recipientIsCompanyRep(uid, companyId) {
+        return notificationRecipientState(uid) &&
+               userData(uid).role == 'COMPANY_REP' &&
+               userData(uid).companyId == companyId;
+      }
+
+      function recipientIsReviewer(uid) {
+        return notificationRecipientState(uid) &&
+               userData(uid).role in ['HSE_MANAGER', 'HSE_OFFICER', 'SUPER_ADMIN'];
+      }
+
+      // Common shape of every notification document.
+      function notificationShapeValid() {
+        return request.resource.data.id == id &&
+               request.resource.data.dedupeKey == id &&
+               request.resource.data.dedupeKey.matches('^[A-Z_]+:[^/:]+:[^/:]+(:c[0-9]+)?$') &&
+               request.resource.data.recipientUserId is string &&
+               request.resource.data.recipientUserId != request.auth.uid &&
+               request.resource.data.type in ['OBSERVATION_CREATED',
+                 'CORRECTIVE_ACTION_REQUIRED', 'CORRECTIVE_ACTION_SUBMITTED',
+                 'CORRECTIVE_ACTION_RETURNED', 'CORRECTIVE_ACTION_ACCEPTED',
+                 'OBSERVATION_CLOSED'] &&
+               request.resource.data.entityType in ['observation', 'corrective_action'] &&
+               request.resource.data.observationId is string &&
+               request.resource.data.entityId == request.resource.data.observationId &&
+               request.resource.data.read == false &&
+               !('readAt' in request.resource.data) &&
+               request.resource.data.createdAt is int &&
+               request.resource.data.titleKey ==
+                 'notifications.' + lower(request.resource.data.type) + '.title' &&
+               request.resource.data.messageKey ==
+                 'notifications.' + lower(request.resource.data.type) + '.message' &&
+               (!('messageParams' in request.resource.data) ||
+                (request.resource.data.messageParams is map &&
+                 request.resource.data.messageParams.size() <= 8));
+      }
+
+      // OBSERVATION_CREATED: the reporter just submitted an OPEN observation;
+      // recipients are HSE staff or Area Authorities assigned to the area.
+      function notificationObservationCreatedValid() {
+        let obs = getObservation(request.resource.data.observationId).data;
+        return request.resource.data.type == 'OBSERVATION_CREATED' &&
+               request.resource.data.entityType == 'observation' &&
+               obs.status == 'OPEN' &&
+               obs.submittedAt is int &&
+               obs.reporterId == request.auth.uid &&
+               request.resource.data.companyId == obs.companyId &&
+               request.resource.data.areaId == obs.areaId &&
+               (recipientIsHse(request.resource.data.recipientUserId) ||
+                recipientIsAreaAuthority(request.resource.data.recipientUserId, obs.areaId));
+      }
+
+      // OBSERVATION_CLOSED: an HSE verifier closed the observation;
+      // recipients are HSE staff or Area Authorities assigned to the area.
+      function notificationObservationClosedValid() {
+        let obs = getObservation(request.resource.data.observationId).data;
+        return request.resource.data.type == 'OBSERVATION_CLOSED' &&
+               request.resource.data.entityType == 'observation' &&
+               obs.status == 'CLOSED' &&
+               obs.closedBy == request.auth.uid &&
+               request.resource.data.companyId == obs.companyId &&
+               request.resource.data.areaId == obs.areaId &&
+               (recipientIsHse(request.resource.data.recipientUserId) ||
+                recipientIsAreaAuthority(request.resource.data.recipientUserId, obs.areaId));
+      }
+
+      // Corrective-action notifications share the observation id as document
+      // id; the recipient depends on the lifecycle step.
+      function notificationCorrectiveActionValid() {
+        let obsId = request.resource.data.observationId;
+        let action = getCorrectiveAction(obsId);
+        let obs = getObservation(obsId).data;
+        return request.resource.data.entityType == 'corrective_action' &&
+               request.resource.data.correctiveActionId == obsId &&
+               request.resource.data.companyId == action.companyId &&
+               request.resource.data.areaId == obs.areaId &&
+               (
+                 // HSE requested the action -> the responsible company reps.
+                 (request.resource.data.type == 'CORRECTIVE_ACTION_REQUIRED' &&
+                  action.status == 'REQUIRED' &&
+                  action.createdBy == request.auth.uid &&
+                  recipientIsCompanyRep(request.resource.data.recipientUserId,
+                    action.companyId)) ||
+                 // The company submitted -> the HSE reviewers.
+                 (request.resource.data.type == 'CORRECTIVE_ACTION_SUBMITTED' &&
+                  action.status == 'SUBMITTED' &&
+                  action.submittedBy == request.auth.uid &&
+                  recipientIsReviewer(request.resource.data.recipientUserId)) ||
+                 // HSE returned the action -> the responsible company reps.
+                 (request.resource.data.type == 'CORRECTIVE_ACTION_RETURNED' &&
+                  action.status == 'RETURNED' &&
+                  action.returnedBy == request.auth.uid &&
+                  recipientIsCompanyRep(request.resource.data.recipientUserId,
+                    action.companyId)) ||
+                 // HSE accepted the action -> the responsible company reps.
+                 (request.resource.data.type == 'CORRECTIVE_ACTION_ACCEPTED' &&
+                  action.status == 'ACCEPTED' &&
+                  action.verifiedBy == request.auth.uid &&
+                  recipientIsCompanyRep(request.resource.data.recipientUserId,
+                    action.companyId))
+               );
+      }
+
+      function isValidNotificationCreate() {
+        return notificationShapeValid() &&
+          (notificationObservationCreatedValid() ||
+           notificationObservationClosedValid() ||
+           notificationCorrectiveActionValid());
+      }
+
+      // The recipient may only flip `read`/`readAt` on their own document.
+      function isValidNotificationUpdate() {
+        return request.resource.data.id == resource.data.id &&
+               request.resource.data.dedupeKey == resource.data.dedupeKey &&
+               request.resource.data.recipientUserId == resource.data.recipientUserId &&
+               request.resource.data.type == resource.data.type &&
+               request.resource.data.titleKey == resource.data.titleKey &&
+               request.resource.data.messageKey == resource.data.messageKey &&
+               request.resource.data.messageParams == resource.data.messageParams &&
+               request.resource.data.entityType == resource.data.entityType &&
+               request.resource.data.entityId == resource.data.entityId &&
+               request.resource.data.observationId == resource.data.observationId &&
+               request.resource.data.correctiveActionId == resource.data.correctiveActionId &&
+               request.resource.data.companyId == resource.data.companyId &&
+               request.resource.data.areaId == resource.data.areaId &&
+               request.resource.data.createdAt == resource.data.createdAt &&
+               request.resource.data.read is bool &&
+               (
+                 (request.resource.data.read == true &&
+                  request.resource.data.readAt is int) ||
+                 (request.resource.data.read == false &&
+                  !('readAt' in request.resource.data))
+               );
+      }
+
+      allow create: if isSignedIn() && isApproved() && isValidNotificationCreate();
+
+      // Own notifications only (read/update/delete).
+      allow read: if isSignedIn() && resource.data.recipientUserId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        resource.data.recipientUserId == request.auth.uid &&
+        isValidNotificationUpdate();
+      allow delete: if isSignedIn() && resource.data.recipientUserId == request.auth.uid;
+    }
+
+    // ---------- audit log -------------------------------------------------
+
+    match /auditLogs/{id} {
+      // Append-only. HSE/Admin record actions; Company Representatives may
+      // only record their own corrective-action submission.
+      allow create: if isSignedIn() &&
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.createdAt is int && (
+          isHse() || isAdmin() ||
+          (isCompanyRep() &&
+           request.resource.data.action == 'corrective_action.submitted')
+        );
+      allow read: if isHse() || isAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

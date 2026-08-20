@@ -1,0 +1,85 @@
+// HSE Management System — Cloud Storage security rules (Phase 4).
+//
+// Observation evidence photos/documents live under /evidence/<observationId>/
+//   - Readable by approved HSE roles (incl. PA review) and the Super Admin.
+//   - Writable only by approved HSE reporters/Super Admin.
+//
+// Corrective-action evidence lives under /correctiveActionEvidence/<observationId>/
+//   - Readable by HSE roles / Super Admin, or the Company Representative of
+//     the Observation's company (they must be able to re-read their uploads).
+//   - Writable ONLY by the Company Representative whose company owns the
+//     Observation, and only while the corrective action is submittable
+//     (status REQUIRED or RETURNED). Once submitted it becomes immutable.
+//   - Max 10 MB per file and only sensible image/document extensions.
+//
+// The Firestore rules independently validate the matching evidence metadata,
+// so frontend validation alone is never trusted.
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function me() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isApproved() {
+      return request.auth != null &&
+             me().status == 'APPROVED' &&
+             me().active == true;
+    }
+
+    function canManageEvidence() {
+      return isApproved() &&
+             (me().role == 'SUPER_ADMIN' ||
+              me().role == 'HSE_MANAGER' ||
+              me().role == 'HSE_OFFICER' ||
+              me().role == 'PA');
+    }
+
+    function isCompanyRep() {
+      return isApproved() && me().role == 'COMPANY_REP';
+    }
+
+    // The corrective action may receive evidence only while submittable
+    // (REQUIRED or RETURNED) and the observation is awaiting it.
+    function actionSubmittable(observationId) {
+      let action = firestore.get(
+        /databases/(default)/documents/correctiveActions/$(observationId)).data;
+      let observation = firestore.get(
+        /databases/(default)/documents/observations/$(observationId)).data;
+      return action != null &&
+             (action.status == 'REQUIRED' || action.status == 'RETURNED') &&
+             observation.status == 'ACTION_REQUIRED' &&
+             action.companyId == me().companyId &&
+             observation.companyId == me().companyId;
+    }
+
+    match /evidence/{observationId}/{allPaths=**} {
+      allow read: if canManageEvidence();
+      allow write: if canManageEvidence() &&
+        request.resource.size >= 0 &&
+        request.resource.size <= 10485760 &&
+        request.resource.name.matches(
+          '.*\\.(jpg|jpeg|png|gif|webp|heic|heif|pdf|doc|docx|xls|xlsx|csv)$');
+    }
+
+    match /correctiveActionEvidence/{observationId}/{allPaths=**} {
+      allow read: if canManageEvidence() ||
+        (isCompanyRep() &&
+         firestore.get(
+           /databases/(default)/documents/observations/$(observationId)).data.companyId ==
+           me().companyId);
+      allow write: if isCompanyRep() &&
+        actionSubmittable(observationId) &&
+        request.resource.size >= 0 &&
+        request.resource.size <= 10485760 &&
+        request.resource.name.matches(
+          '.*\\.(jpg|jpeg|png|gif|webp|heic|heif|pdf|doc|docx|xls|xlsx|csv)$');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

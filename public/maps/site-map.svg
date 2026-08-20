@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-label="Site map placeholder">
+  <rect width="1200" height="900" fill="#eef2f7"/>
+  <rect x="40" y="40" width="1120" height="820" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <line x1="40" y1="450" x2="1160" y2="450" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="12 8"/>
+  <text x="600" y="430" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="600" fill="#64748b">OIL SECTION</text>
+  <text x="600" y="880" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="600" fill="#64748b">GAS SECTION</text>
+  <g stroke="#cbd5e1" stroke-width="1" opacity="0.6">
+    <line x1="300" y1="60" x2="300" y2="440"/><line x1="600" y1="60" x2="600" y2="440"/><line x1="900" y1="60" x2="900" y2="440"/>
+    <line x1="140" y1="220" x2="1060" y2="220"/><line x1="140" y1="360" x2="1060" y2="360"/>
+    <line x1="300" y1="460" x2="300" y2="840"/><line x1="600" y1="460" x2="600" y2="840"/><line x1="900" y1="460" x2="900" y2="840"/>
+    <line x1="140" y1="620" x2="1060" y2="620"/><line x1="140" y1="760" x2="1060" y2="760"/>
+  </g>
+  <text x="600" y="520" text-anchor="middle" font-family="sans-serif" font-size="26" font-weight="700" fill="#334155">SITE MAP PLACEHOLDER</text>
+  <text x="600" y="560" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#94a3b8">Replace this file with the actual station site map image</text>
+  <text x="600" y="588" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#94a3b8">public/maps/site-map.svg (or PNG/JPG) and update SITE_MAP_IMAGE_URL in src/config/map.ts</text>
+  <text x="600" y="636" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#94a3b8">Area markers are placed from the Areas records (Admin → Areas → Set Map Location)</text>
+</svg>
