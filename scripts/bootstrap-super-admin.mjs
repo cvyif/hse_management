@@ -38,7 +38,9 @@
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
 
-import admin from 'firebase-admin'
+import admin, { cert } from 'firebase-admin'
+import { getAuth } from 'firebase-admin/auth'
+import { getFirestore } from 'firebase-admin/firestore'
 
 function parseArgs(argv) {
   const args = {}
@@ -78,14 +80,14 @@ async function main() {
   const serviceAccountPath = resolveServiceAccount(args)
   const serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'))
 
-  if (admin.apps.length === 0) {
+  if (admin.getApps().length === 0) {
     admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+      credential: cert(serviceAccount),
     })
   }
 
-  const auth = admin.auth()
-  const firestore = admin.firestore()
+  const auth = getAuth()
+  const firestore = getFirestore()
   const now = Date.now()
 
   let uid

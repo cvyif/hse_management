@@ -294,6 +294,70 @@ service cloud.firestore {
               request.resource.data.returnReason == resource.data.returnReason);
     }
 
+    // Field-level immutability locks shared by the users update branches.
+    function userIdentityFieldsUnchanged() {
+      return request.resource.data.uid == resource.data.uid &&
+             request.resource.data.email == resource.data.email;
+    }
+
+    // Role/status/company/approval-request fields can never self-change.
+    function userAuthorizationFieldsUnchanged() {
+      return request.resource.data.role == resource.data.role &&
+             request.resource.data.status == resource.data.status &&
+             request.resource.data.active == resource.data.active &&
+             request.resource.data.companyId == resource.data.companyId &&
+             request.resource.data.requestedRole == resource.data.requestedRole;
+    }
+
+    // Approval/rejection audit fields are Super Admin controlled only.
+    function userLifecycleFieldsUnchanged() {
+      return request.resource.data.approvedBy == resource.data.approvedBy &&
+             request.resource.data.approvedAt == resource.data.approvedAt &&
+             request.resource.data.rejectedBy == resource.data.rejectedBy &&
+             request.resource.data.rejectedAt == resource.data.rejectedAt &&
+             request.resource.data.rejectedReason == resource.data.rejectedReason;
+    }
+
+    // Profile presentation fields (HSE assigned-areas maintenance branch).
+    function userProfileFieldsUnchanged() {
+      return request.resource.data.displayName == resource.data.displayName &&
+             request.resource.data.phone == resource.data.phone &&
+             request.resource.data.language == resource.data.language;
+    }
+
+    // Self-service edits to non-authorization fields: every authorization
+    // and lifecycle field must remain exactly as stored.
+    function userSelfEditUnchanged() {
+      return userIdentityFieldsUnchanged() &&
+             userAuthorizationFieldsUnchanged() &&
+             userLifecycleFieldsUnchanged() &&
+             request.resource.data.assignedAreaIds == resource.data.assignedAreaIds;
+    }
+
+    // Super Admin managing OTHER users. The target's identity (uid/email)
+    // stays fixed and SUPER_ADMIN role is never assignable.
+    function adminUserUpdate() {
+      return isAdmin() && uid != request.auth.uid &&
+             userIdentityFieldsUnchanged() &&
+             request.resource.data.role != 'SUPER_ADMIN';
+    }
+
+    // HSE Manager / Super Admin maintaining ONLY `assignedAreaIds` on OTHER
+    // users (assignment service keeps the area scoping/notification routing
+    // current); all other fields must remain unchanged and the target can
+    // never be SUPER_ADMIN. Every referenced area must be active.
+    function hseAssignedAreasUpdate() {
+      return (isHseManager() || isAdmin()) && uid != request.auth.uid &&
+             userIdentityFieldsUnchanged() &&
+             userAuthorizationFieldsUnchanged() &&
+             userLifecycleFieldsUnchanged() &&
+             userProfileFieldsUnchanged() &&
+             request.resource.data.role != 'SUPER_ADMIN' &&
+             request.resource.data.assignedAreaIds is list &&
+             request.resource.data.assignedAreaIds.all(
+               areaId, getArea(areaId).active == true);
+    }
+
     // ---------- users -----------------------------------------------------
 
     match /users/{uid} {
@@ -314,49 +378,13 @@ service cloud.firestore {
 
       // Self-service edits to non-authorization fields, OR Super Admin
       // managing OTHER users, OR (Phase 5) HSE Manager / Super Admin
-      // maintaining ONLY `assignedAreaIds` on OTHER users (assignment service
-      // keeps the area scoping/notification routing current; all other fields
-      // must remain unchanged and the target can never be SUPER_ADMIN).
+      // maintaining ONLY `assignedAreaIds` on OTHER users (see the helpers
+      // above for the exact per-branch field contracts).
       // SUPER_ADMIN role is never assignable.
       allow update: if isSignedIn() && (
-        (request.auth.uid == uid &&
-         request.resource.data.uid == resource.data.uid &&
-         request.resource.data.email == resource.data.email &&
-         request.resource.data.role == resource.data.role &&
-         request.resource.data.status == resource.data.status &&
-         request.resource.data.active == resource.data.active &&
-         request.resource.data.companyId == resource.data.companyId &&
-         request.resource.data.requestedRole == resource.data.requestedRole &&
-         request.resource.data.assignedAreaIds == resource.data.assignedAreaIds &&
-         request.resource.data.approvedBy == resource.data.approvedBy &&
-         request.resource.data.approvedAt == resource.data.approvedAt &&
-         request.resource.data.rejectedBy == resource.data.rejectedBy &&
-         request.resource.data.rejectedAt == resource.data.rejectedAt &&
-         request.resource.data.rejectedReason == resource.data.rejectedReason) ||
-        (isAdmin() && uid != request.auth.uid &&
-         request.resource.data.uid == resource.data.uid &&
-         request.resource.data.email == resource.data.email &&
-         request.resource.data.role != 'SUPER_ADMIN') ||
-        ((isHseManager() || isAdmin()) && uid != request.auth.uid &&
-         request.resource.data.uid == resource.data.uid &&
-         request.resource.data.role == resource.data.role &&
-         request.resource.data.role != 'SUPER_ADMIN' &&
-         request.resource.data.email == resource.data.email &&
-         request.resource.data.displayName == resource.data.displayName &&
-         request.resource.data.phone == resource.data.phone &&
-         request.resource.data.language == resource.data.language &&
-         request.resource.data.status == resource.data.status &&
-         request.resource.data.active == resource.data.active &&
-         request.resource.data.companyId == resource.data.companyId &&
-         request.resource.data.requestedRole == resource.data.requestedRole &&
-         request.resource.data.approvedBy == resource.data.approvedBy &&
-         request.resource.data.approvedAt == resource.data.approvedAt &&
-         request.resource.data.rejectedBy == resource.data.rejectedBy &&
-         request.resource.data.rejectedAt == resource.data.rejectedAt &&
-         request.resource.data.rejectedReason == resource.data.rejectedReason &&
-         request.resource.data.assignedAreaIds is list &&
-         request.resource.data.assignedAreaIds.all(
-           (areaId) => getArea(areaId).active == true))
+        (request.auth.uid == uid && userSelfEditUnchanged()) ||
+        adminUserUpdate() ||
+        hseAssignedAreasUpdate()
       );
 
       // Status-based deactivation instead of deletion.
