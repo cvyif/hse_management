@@ -21,7 +21,8 @@
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
 
-import admin from 'firebase-admin'
+import admin, { cert } from 'firebase-admin'
+import { getFirestore } from 'firebase-admin/firestore'
 
 const SEED_OBSERVATION_TYPES = [
   { key: 'UNSAFE_ACT', label: 'Unsafe Act', labelAr: 'سلوك غير آمن' },
@@ -71,11 +72,11 @@ async function main() {
   const serviceAccountPath = resolveServiceAccount(args)
   const serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'))
 
-  if (admin.apps.length === 0) {
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) })
+  if (admin.getApps().length === 0) {
+    admin.initializeApp({ credential: cert(serviceAccount) })
   }
 
-  const firestore = admin.firestore()
+  const firestore = getFirestore()
   const now = Date.now()
 
   const types = firestore.collection('observationTypes')
