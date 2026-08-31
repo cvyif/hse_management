@@ -134,7 +134,8 @@ export function NewObservationPage() {
   function stepError(stepIndex: number): string | null {
     switch (stepIndex) {
       case 0:
-        return companyId ? null : t('observation.errors.companyRequired')
+        // Company is optional; an Observation can exist without a company.
+        return null
       case 1:
         return areaId ? null : t('observation.errors.areaRequired')
       case 2:
@@ -206,7 +207,7 @@ export function NewObservationPage() {
   function buildInput(): ObservationInput | null {
     if (!selectedArea || !riskLevel) return null
     return {
-      companyId,
+      companyId: companyId || undefined,
       areaId,
       section: selectedArea.section,
       permit: {
@@ -296,11 +297,9 @@ export function NewObservationPage() {
         <CardBody>
           {step === 0 && (
             <div className="flex flex-col gap-4">
-              <Field label={t('observation.form.company')} required hint={t('observation.form.companyHint')}>
+              <Field label={t('observation.form.company')} hint={t('observation.form.companyOptionalHint')}>
                 <Select value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-                  <option value="" disabled>
-                    {t('admin.common.select')}
-                  </option>
+                  <option value="">{t('observation.form.noCompany')}</option>
                   {activeCompanies.map((company) => (
                     <option key={company.id} value={company.id}>
                       {company.name}
@@ -444,7 +443,10 @@ export function NewObservationPage() {
           {step === 5 && (
             <ReviewSummary
               input={{
-                company: activeCompanies.find((c) => c.id === companyId)?.name,
+                company: companyId
+                  ? activeCompanies.find((c) => c.id === companyId)?.name
+                  : undefined,
+                noCompany: !companyId,
                 area: activeAreas.find((a) => a.id === areaId)?.name,
                 section,
                 permitType,
@@ -513,6 +515,7 @@ function ReviewSummary({
 }: {
   input: {
     company?: string
+    noCompany?: boolean
     area?: string
     section?: 'OIL' | 'GAS'
     permitType: PermitType
@@ -527,7 +530,10 @@ function ReviewSummary({
 }) {
   const { t } = useTranslation()
   const rows: { label: string; value: ReactNode }[] = [
-    { label: t('observation.review.company'), value: input.company ?? t('common.notAvailable') },
+    {
+      label: t('observation.review.company'),
+      value: input.noCompany ? t('observation.form.noCompany') : input.company ?? t('common.notAvailable'),
+    },
     { label: t('observation.review.area'), value: input.area ?? t('common.notAvailable') },
     {
       label: t('observation.review.section'),

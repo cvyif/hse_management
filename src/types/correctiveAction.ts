@@ -36,8 +36,11 @@ export interface CorrectiveAction {
   /** Human-readable id (== document id == observationId). */
   correctiveActionId: string
   observationId: string
-  /** The responsible company (copied from the Observation, never edited). */
-  companyId: string
+  /**
+   * The responsible company (copied from the Observation, never edited).
+   * Absent when the Observation has no company.
+   */
+  companyId?: string
   /** The corrective action description (the action itself). */
   description: string
   /** Metadata for the latest submitted evidence (binaries live in Storage). */

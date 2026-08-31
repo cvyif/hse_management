@@ -124,6 +124,8 @@ export default {
     form: {
       company: 'الشركة',
       companyHint: 'يمكن اختيار الشركات النشطة فقط.',
+      companyOptionalHint: 'اختياري — اترك "بدون شركة" إذا لم تنطبق أي شركة.',
+      noCompany: 'بدون شركة',
       area: 'المنطقة',
       areaHint: 'اختر المنطقة لتحديد القسم تلقائياً.',
       section: 'القسم',
@@ -496,6 +498,8 @@ filterByStatus: 'الحالة',
       createTitle: 'شركة جديدة',
       editTitle: 'تعديل الشركة',
       nameRequired: 'اسم الشركة مطلوب.',
+      codeRequired: 'رمز الشركة مطلوب.',
+      nameArRequired: 'اسم الشركة (بالعربية) مطلوب.',
     },
     areas: {
       title: 'المناطق',

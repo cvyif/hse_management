@@ -33,7 +33,8 @@ const HSE_RECIPIENT_ROLES = ['HSE_MANAGER', 'HSE_OFFICER'] as const
 /** The minimal Observation fields a notification needs. */
 export interface NotifyObservation {
   observationId: string
-  companyId: string
+  /** Optional — an Observation may exist without a company. */
+  companyId?: string
   areaId: string
 }
 
@@ -92,7 +93,7 @@ function baseRecord(
     messageKey: `notifications.${type.toLowerCase()}.message`,
     messageParams: {
       observationId: ctx.observationId,
-      companyId: ctx.companyId,
+      companyId: ctx.companyId ?? '',
       areaId: ctx.areaId,
     },
     entityType,

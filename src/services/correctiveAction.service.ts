@@ -4,12 +4,16 @@ import {
   writeBatch,
   type DocumentReference,
 } from 'firebase/firestore'
-import { ref, uploadBytes, type StorageReference } from 'firebase/storage'
 
-import { db, storage } from '@/config/firebase'
+import { db } from '@/config/firebase'
 import { hasPermission } from '@/lib/permissions'
 import { now } from '@/lib/utils'
 import { createAuditEntry } from '@/services/audit.service'
+import {
+  evidencePublicId,
+  isEvidenceUploadConfigured,
+  uploadEvidenceFile,
+} from '@/services/supabase.service'
 import {
   notifyActionAccepted,
   notifyActionRequired,
@@ -149,7 +153,9 @@ export async function submitCorrectiveAction(
   actor: ObservationActor,
 ): Promise<CorrectiveAction> {
   if (!db) throw new Error('Firebase is not configured.')
-  if (!storage) throw new Error('Firebase Storage is not configured.')
+  if (!isEvidenceUploadConfigured()) {
+    throw new Error('Evidence storage is not configured.')
+  }
   assertPermission(actor.role, 'action:submit')
 
   const description = input.description.trim()
@@ -191,18 +197,21 @@ export async function submitCorrectiveAction(
   const timestamp = now()
   const evidenceItems: EvidenceItem[] = []
   for (const item of files) {
-    const storagePath = `${ACTION_EVIDENCE_PREFIX}/${observationId}/${item.id}${extensionOf(item.file.name)}`
-    const storageRef: StorageReference = ref(storage, storagePath)
-    const contentType = item.file.type || 'application/octet-stream'
-    await uploadBytes(storageRef, item.file, { contentType })
+    const publicId = evidencePublicId(ACTION_EVIDENCE_PREFIX, observationId, item.id)
+    const uploaded = await uploadEvidenceFile(item.file, publicId)
     evidenceItems.push({
       id: item.id,
       name: item.file.name,
-      storagePath,
-      contentType,
+      contentType: item.file.type || 'application/octet-stream',
       sizeBytes: item.file.size,
       uploadedAt: timestamp,
       uploadedBy: actor.uid,
+      provider: 'supabase',
+      publicId: uploaded.publicId,
+      url: uploaded.url,
+      format:
+        uploaded.format ||
+        extensionOf(item.file.name).replace(/^\./, ''),
     })
   }
 

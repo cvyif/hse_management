@@ -56,21 +56,38 @@ export interface PermitInfo {
   number?: string
 }
 
+/** Binary storage providers for evidence files. */
+export const EVIDENCE_PROVIDERS = ['supabase'] as const
+
+export type EvidenceProvider = (typeof EVIDENCE_PROVIDERS)[number]
+
 /**
- * Metadata for one evidence file. The file binary lives in Firebase
- * Storage; only metadata is stored in Firestore.
+ * Metadata for one evidence file. The binary lives on the external provider
+ * (Supabase Storage); only metadata is stored in Firestore, which remains the
+ * authorization source of truth for the owning Observation.
  */
 export interface EvidenceItem {
-  /** Unique file id (also part of the storage path). */
+  /** Unique file id (also part of the provider public id). */
   id: string
   /** Original file name as chosen by the reporter. */
   name: string
-  /** Firebase Storage path, e.g. evidence/<observationId>/<fileId>.jpg. */
-  storagePath: string
+  /**
+   * Legacy Firebase Storage path. Present only on pre-Supabase items;
+   * new items use provider/publicId/url instead.
+   */
+  storagePath?: string
   contentType: string
   sizeBytes: number
   uploadedAt: number
   uploadedBy: string
+  /** Binary host for this file. */
+  provider: EvidenceProvider
+  /** Provider public id, bound to <prefix>/<observationId>/<fileId>. */
+  publicId: string
+  /** Provider-delivered secure URL used by the gallery. */
+  url: string
+  /** Provider-reported format (e.g. jpg, pdf). */
+  format: string
 }
 
 /** A single status change in an Observation timeline. */
@@ -98,7 +115,8 @@ export interface Observation {
   id: string
   /** Human-readable sequential id, e.g. `OBS-2026-00001` (== document id). */
   observationId: string
-  companyId: string
+  /** Optional owning company. Absent when no company is applicable. */
+  companyId?: string
   areaId: string
   /** Derived from the Area — never supplied independently by the user. */
   section: Section
@@ -130,7 +148,8 @@ export interface Observation {
 
 /** Editable fields of an Observation (everything except audit/history data). */
 export interface ObservationInput {
-  companyId: string
+  /** Optional owning company. Omit when no company is applicable. */
+  companyId?: string
   areaId: string
   section: Section
   permit: PermitInfo

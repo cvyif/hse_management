@@ -12,13 +12,17 @@ import {
   type DocumentReference,
   type QueryConstraint,
 } from 'firebase/firestore'
-import { ref, uploadBytes, type StorageReference } from 'firebase/storage'
 
-import { db, storage } from '@/config/firebase'
+import { db } from '@/config/firebase'
 import { hasPermission } from '@/lib/permissions'
 import { buildObservationId, now } from '@/lib/utils'
 import { canTransition, transitionPermission } from '@/lib/workflow'
 import { createAuditEntry } from '@/services/audit.service'
+import {
+  evidencePublicId,
+  isEvidenceUploadConfigured,
+  uploadEvidenceFile,
+} from '@/services/supabase.service'
 import { notifyObservationCreated } from '@/services/notification.service'
 import type { AuditAction } from '@/types/audit'
 import type { Role } from '@/types/roles'
@@ -228,7 +232,9 @@ export async function submitObservation(
   actor: ObservationActor,
 ): Promise<Observation> {
   if (!db) throw new Error('Firebase is not configured.')
-  if (!storage) throw new Error('Firebase Storage is not configured.')
+  if (!isEvidenceUploadConfigured()) {
+    throw new Error('Evidence storage is not configured.')
+  }
 
   const errors = validateEvidence(files.map((item) => item.file))
   if (errors.length > 0) throw new Error(errors.join(' '))
@@ -236,18 +242,21 @@ export async function submitObservation(
   const timestamp = now()
   const evidenceItems: EvidenceItem[] = []
   for (const item of files) {
-    const storagePath = `evidence/${id}/${item.id}${extensionOf(item.file.name)}`
-    const storageRef: StorageReference = ref(storage, storagePath)
-    const contentType = item.file.type || 'application/octet-stream'
-    await uploadBytes(storageRef, item.file, { contentType })
+    const publicId = evidencePublicId('evidence', id, item.id)
+    const uploaded = await uploadEvidenceFile(item.file, publicId)
     evidenceItems.push({
       id: item.id,
       name: item.file.name,
-      storagePath,
-      contentType,
+      contentType: item.file.type || 'application/octet-stream',
       sizeBytes: item.file.size,
       uploadedAt: timestamp,
       uploadedBy: actor.uid,
+      provider: 'supabase',
+      publicId: uploaded.publicId,
+      url: uploaded.url,
+      format:
+        uploaded.format ||
+        extensionOf(item.file.name).replace(/^\./, ''),
     })
   }
 

@@ -1,32 +1,25 @@
-import { useEffect, useState } from 'react'
-import { getDownloadURL, ref } from 'firebase/storage'
+import { useMemo } from 'react'
 
-import { storage } from '@/config/firebase'
 import type { EvidenceItem } from '@/types/observation'
 
-/** Resolve signed download URLs for the evidence items. */
+/**
+ * Resolve display URLs for evidence items. Supabase items carry their
+ * delivered secure URL in metadata; items without a URL (legacy shapes) are
+ * reported as failed so the gallery shows the existing unavailable state.
+ */
 export function useEvidenceUrls(items: EvidenceItem[] | undefined) {
-  const [urls, setUrls] = useState<Record<string, string>>({})
-  const [failed, setFailed] = useState<string[]>([])
-
-  useEffect(() => {
-    let active = true
-    setUrls({})
-    setFailed([])
-    if (!storage || !items || items.length === 0) return
-    for (const item of items) {
-      getDownloadURL(ref(storage, item.storagePath))
-        .then((url) => {
-          if (active) setUrls((prev) => ({ ...prev, [item.id]: url }))
-        })
-        .catch(() => {
-          if (active) setFailed((prev) => [...prev, item.name])
-        })
+  const urls = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const item of items ?? []) {
+      if (item.url) map[item.id] = item.url
     }
-    return () => {
-      active = false
-    }
+    return map
   }, [items])
+
+  const failed = useMemo(
+    () => (items ?? []).filter((item) => !item.url).map((item) => item.name),
+    [items],
+  )
 
   return { urls, failed }
 }

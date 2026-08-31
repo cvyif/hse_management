@@ -1,13 +1,13 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app'
 import { getAuth, connectAuthEmulator } from 'firebase/auth'
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
-import { getStorage, connectStorageEmulator } from 'firebase/storage'
 
 import { emulatorEnv, firebaseEnv, isFirebaseConfigured, useEmulators } from '@/config/env'
 
 /**
  * Firebase client. Initialized lazily so the application can still boot
  * (and show a configuration notice) when the `.env` file is not filled in.
+ * Evidence binaries are hosted on Supabase Storage; Firebase Storage is unused.
  */
 export const app: FirebaseApp | null = isFirebaseConfigured()
   ? getApps()[0] ?? initializeApp(firebaseEnv)
@@ -16,16 +16,11 @@ export const app: FirebaseApp | null = isFirebaseConfigured()
 if (useEmulators && app) {
   const auth = getAuth(app)
   const firestore = getFirestore(app)
-  const storage = getStorage(app)
 
   if (emulatorEnv.auth) connectAuthEmulator(auth, emulatorEnv.auth)
   if (emulatorEnv.firestore) {
     const { host, port } = parseEmulatorUrl(emulatorEnv.firestore)
     connectFirestoreEmulator(firestore, host, port)
-  }
-  if (emulatorEnv.storage) {
-    const { host, port } = parseEmulatorUrl(emulatorEnv.storage)
-    connectStorageEmulator(storage, host, port)
   }
 }
 
@@ -38,9 +33,6 @@ function parseEmulatorUrl(url: string): { host: string; port: number } {
 
 /** Firestore database instance, or null when Firebase is not configured. */
 export const db = app ? getFirestore(app) : null
-
-/** Firebase Storage instance, or null when Firebase is not configured. */
-export const storage = app ? getStorage(app) : null
 
 /** Firebase Auth instance, or null when Firebase is not configured. */
 export const auth = app ? getAuth(app) : null

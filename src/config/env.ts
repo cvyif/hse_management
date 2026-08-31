@@ -20,6 +20,13 @@ export interface EmulatorEnv {
   storage: string | null
 }
 
+export interface SupabaseEnv {
+  /** Project URL, e.g. https://<ref>.supabase.co (browser-safe). */
+  url: string
+  /** Publishable anon key (browser-safe; NEVER the service-role key). */
+  anonKey: string
+}
+
 function read(name: string): string {
   const value = import.meta.env[name] as string | undefined
   return value?.trim() ?? ''
@@ -36,6 +43,11 @@ export const firebaseEnv: FirebaseEnv = {
 
 export const useEmulators = read('VITE_USE_FIREBASE_EMULATORS') === 'true'
 
+export const supabaseEnv: SupabaseEnv = {
+  url: read('VITE_SUPABASE_URL').replace(/\/+$/, ''),
+  anonKey: read('VITE_SUPABASE_ANON_KEY'),
+}
+
 export const emulatorEnv: EmulatorEnv = {
   auth: read('VITE_FIREBASE_AUTH_EMULATOR_URL') || null,
   firestore: read('VITE_FIREBASE_FIRESTORE_EMULATOR_URL') || null,
@@ -45,6 +57,11 @@ export const emulatorEnv: EmulatorEnv = {
 /** True when every required Firebase field has been provided. */
 export function isFirebaseConfigured(): boolean {
   return Object.values(firebaseEnv).every((value) => value.length > 0)
+}
+
+/** True when the Supabase evidence-storage configuration is complete. */
+export function isSupabaseConfigured(): boolean {
+  return supabaseEnv.url.length > 0 && supabaseEnv.anonKey.length > 0
 }
 
 export const isDev = import.meta.env.DEV

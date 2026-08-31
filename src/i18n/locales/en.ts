@@ -124,6 +124,8 @@ export default {
     form: {
       company: 'Company',
       companyHint: 'Only active companies can be selected.',
+      companyOptionalHint: 'Optional — leave as No Company if none applies.',
+      noCompany: 'No company',
       area: 'Area',
       areaHint: 'Select an area to determine its section automatically.',
       section: 'Section',
@@ -496,6 +498,8 @@ export default {
       createTitle: 'New Company',
       editTitle: 'Edit Company',
       nameRequired: 'Company name is required.',
+      codeRequired: 'Company code is required.',
+      nameArRequired: 'Company name (Arabic) is required.',
     },
     areas: {
       title: 'Areas',

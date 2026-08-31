@@ -150,16 +150,43 @@ service cloud.firestore {
              request.resource.data.mapPosition.y <= 1;
     }
 
-    function validEvidenceItem(item) {
+    // Shared evidence constraints: same size/content-type allowlist as the
+    // legacy Firebase Storage rules, applied to both providers.
+    function evidenceSizeAndTypeOk(item) {
       return item.uploadedBy == request.auth.uid &&
              item.sizeBytes is int &&
              item.sizeBytes >= 0 &&
              item.sizeBytes <= 10485760 &&
-             item.storagePath.matches('^evidence/' + resource.data.id + '/[^/]+$') &&
              item.contentType.matches(
                '^(image/(jpeg|png|gif|webp|heic|heif)|' +
                'application/pdf|application/msword|application/vnd\\.ms-excel|' +
                'application/vnd\\.openxmlformats-officedocument\\..*|text/csv)$');
+    }
+
+    // Supabase-hosted binaries live outside Firebase; Firestore stays the
+    // authorization boundary. The metadata must be provider-tagged and its
+    // publicId bound to <prefix>/<parentDocId>/<fileId>.
+    function supabaseEvidenceItem(item, prefix) {
+      return item.provider == 'supabase' &&
+             item.publicId is string &&
+             item.url is string &&
+             item.format is string &&
+             item.publicId.matches('^' + prefix + '/[^/]+$') &&
+             item.url.matches('^https://[A-Za-z0-9-]+\\.supabase\\.co/storage/v1/object/public/' + prefix.split('/')[0] + '/.+') &&
+             evidenceSizeAndTypeOk(item);
+    }
+
+    // Legacy pre-Cloudinary items carry a Firebase Storage path instead.
+    function legacyEvidenceItem(item, pathPrefix) {
+      return !('provider' in item) &&
+             ('storagePath' in item) &&
+             item.storagePath.matches('^' + pathPrefix + '/[^/]+$') &&
+             evidenceSizeAndTypeOk(item);
+    }
+
+    function validEvidenceItem(item) {
+      return legacyEvidenceItem(item, 'evidence/' + resource.data.id) ||
+             supabaseEvidenceItem(item, 'evidence/' + resource.data.id);
     }
 
     function validEvidence() {
@@ -173,8 +200,13 @@ service cloud.firestore {
       return request.resource.data.status == 'OPEN' &&
              request.resource.data.observationId == id &&
              isValidObservationId() &&
-             request.resource.data.companyId is string &&
-             getCompany(request.resource.data.companyId).active == true &&
+             // Company is OPTIONAL: an Observation may exist without one. When
+             // present it must reference an active company. Scope rules that
+             // read companyId (e.g. a COMPANY_REP only seeing `== me().companyId`)
+             // are NOT changed by allowing it to be absent.
+             (!('companyId' in request.resource.data) ||
+              (request.resource.data.companyId is string &&
+               getCompany(request.resource.data.companyId).active == true)) &&
              request.resource.data.areaId is string &&
              getArea(request.resource.data.areaId).active == true &&
              getArea(request.resource.data.areaId).section == request.resource.data.section &&
@@ -252,16 +284,8 @@ service cloud.firestore {
     }
 
     function validActionEvidenceItem(item) {
-      return item.uploadedBy == request.auth.uid &&
-             item.sizeBytes is int &&
-             item.sizeBytes >= 0 &&
-             item.sizeBytes <= 10485760 &&
-             item.storagePath.matches(
-               '^correctiveActionEvidence/' + id + '/[^/]+$') &&
-             item.contentType.matches(
-               '^(image/(jpeg|png|gif|webp|heic|heif)|' +
-               'application/pdf|application/msword|application/vnd\\.ms-excel|' +
-               'application/vnd\\.openxmlformats-officedocument\\..*|text/csv)$');
+      return legacyEvidenceItem(item, 'correctiveActionEvidence/' + id) ||
+             supabaseEvidenceItem(item, 'correctiveActionEvidence/' + id);
     }
 
     function validActionEvidence() {

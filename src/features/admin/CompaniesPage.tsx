@@ -181,17 +181,37 @@ function CompanyDialog({
   const [error, setError] = useState<string | null>(null)
 
   const isCreate = company == null
-  const dirty = name.trim() !== (company?.name ?? '').trim()
+  const dirty =
+    name.trim() !== (company?.name ?? '').trim() ||
+    code.trim() !== (company?.code ?? '').trim() ||
+    nameAr.trim() !== (company?.nameAr ?? '').trim()
 
-  function submit() {
+  async function submit() {
     if (!name.trim()) {
       setError(t('admin.companies.nameRequired'))
       return
     }
-    const input = { name, code, nameAr }
-    void (isCreate ? create.mutateAsync(input) : update.mutateAsync({ id: company.id, input })).then(
-      onClose,
-    )
+    if (!code.trim()) {
+      setError(t('admin.companies.codeRequired'))
+      return
+    }
+    if (!nameAr.trim()) {
+      setError(t('admin.companies.nameArRequired'))
+      return
+    }
+    setError(null)
+    try {
+      const input = { name, code, nameAr }
+      if (isCreate) await create.mutateAsync(input)
+      else await update.mutateAsync({ id: company.id, input })
+      onClose()
+    } catch (mutationError) {
+      const message =
+        mutationError instanceof Error && mutationError.message
+          ? mutationError.message
+          : t('errors.generic')
+      setError(message)
+    }
   }
 
   return (
@@ -199,18 +219,24 @@ function CompanyDialog({
       open
       title={t(isCreate ? 'admin.companies.createTitle' : 'admin.companies.editTitle')}
       message={
-        <div className="flex flex-col gap-3">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit()
+          }}
+          className="flex flex-col gap-3"
+        >
           {error && <p className="text-sm text-red-600">{error}</p>}
           <Field label={t('admin.companies.name')} required>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label={t('admin.companies.code')} hint={t('admin.companies.codeHint')}>
+          <Field label={t('admin.companies.code')} required>
             <Input value={code} onChange={(e) => setCode(e.target.value)} />
           </Field>
-          <Field label={t('admin.companies.nameAr')}>
+          <Field label={t('admin.companies.nameAr')} required>
             <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
           </Field>
-        </div>
+        </form>
       }
       confirmLabel={t('common.save')}
       disabled={isCreate ? false : !dirty}

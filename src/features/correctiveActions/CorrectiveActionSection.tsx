@@ -119,7 +119,7 @@ function CompanySubmissionForm({
   profileCompanyId,
 }: {
   observationId: string
-  companyId: string
+  companyId?: string
   profileCompanyId?: string
 }) {
   const { t } = useTranslation()
