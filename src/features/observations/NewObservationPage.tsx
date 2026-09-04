@@ -175,10 +175,9 @@ export function NewObservationPage() {
       section,
       permit: {
         type: permitType,
-        number:
-          permitType !== 'NOT_APPLICABLE' && permitNumber.trim()
-            ? permitNumber.trim()
-            : undefined,
+        ...(permitType !== 'NOT_APPLICABLE' && permitNumber.trim()
+          ? { number: permitNumber.trim() }
+          : {}),
       },
       observationTypeId: observationTypeId || undefined,
       riskLevel: riskLevel || undefined,
@@ -212,10 +211,9 @@ export function NewObservationPage() {
       section: selectedArea.section,
       permit: {
         type: permitType,
-        number:
-          permitType !== 'NOT_APPLICABLE' && permitNumber.trim()
-            ? permitNumber.trim()
-            : undefined,
+        ...(permitType !== 'NOT_APPLICABLE' && permitNumber.trim()
+          ? { number: permitNumber.trim() }
+          : {}),
       },
       observationTypeId,
       riskLevel,
