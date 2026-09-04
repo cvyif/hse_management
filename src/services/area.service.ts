@@ -30,7 +30,10 @@ function areaDocRef(id: string) {
 export async function listAreas(): Promise<Area[]> {
   if (!db) throw new Error('Firebase is not configured.')
   const snapshot = await getDocs(query(collection(db, AREAS_COLLECTION), orderBy('name')))
-  return snapshot.docs.map((d) => d.data() as Area)
+  return snapshot.docs.map((d) => ({
+    ...(d.data() as Area),
+    id: d.id,
+  }))
 }
 
 export async function createArea(input: AreaInput, actor: Actor): Promise<Area> {
