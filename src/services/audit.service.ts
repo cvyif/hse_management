@@ -33,9 +33,9 @@ export function createAuditEntry(
     action: input.action,
     entityType: input.entityType,
     entityId: input.entityId,
-    changes: input.changes,
-    metadata: input.metadata,
     createdAt: now(),
+    ...(input.changes !== undefined ? { changes: input.changes } : {}),
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
   }
   return { ref, log }
 }
